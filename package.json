@@ -9,7 +9,7 @@
     "rebuild": "npx @electron/rebuild -v 31.2.0",
     "postinstall": "npx @electron/rebuild -v 31.2.0",
     "dist": "npm run dist:linux",
-    "dist:linux": "electron-builder --linux AppImage --x64",
+    "dist:linux": "electron-builder --linux AppImage deb rpm tar.gz --x64",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --x64",
     "test:smoke": "node test/smoke.js",
@@ -28,7 +28,7 @@
     "pty",
     "xterm"
   ],
-  "author": "Antigravity",
+  "author": "Antigravity <support@antigravity.ide>",
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -66,9 +66,28 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Development",
+      "maintainer": "Antigravity <support@antigravity.ide>",
       "icon": "build/icon.png",
       "artifactName": "${name}-${version}-${arch}.${ext}"
     },
