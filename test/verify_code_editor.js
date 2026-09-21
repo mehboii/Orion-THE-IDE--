@@ -1,163 +1,80 @@
-const { _electron: electron } = require('/Volumes/LINUX MINT/vs code /node_modules/playwright');
+/* Integration coverage for the detached Monaco editor and project-root contract. */
+const { _electron: electron } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const assert = require('assert');
 
-const root = '/Volumes/LINUX MINT/vs code ';
-const testFile = path.join(root, 'test', 'temp_demo_file.js');
+const root = path.resolve(__dirname, '..');
+const fixtureDir = path.join(root, 'test', 'temp-editor-nested');
+const testFile = path.join(fixtureDir, 'temp_demo_file.js');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForWindow(app, marker) {
+  for (let i = 0; i < 80; i += 1) {
+    const page = app.windows().find((candidate) => candidate.url().includes(marker));
+    if (page) return page;
+    await sleep(100);
+  }
+  throw new Error(`Window not found: ${marker}`);
+}
 
 (async () => {
-  console.log('=== STARTING CODE EDITOR & FILE EXPLORER VERIFICATION ===\n');
-
-  // Create a temporary test file for live editing & watching verification
-  const initialContent = `// Initial Demo File\nfunction helloWorld() {\n  return "Hello from Agent IDE";\n}\n`;
+  console.log('=== STARTING CODE EDITOR & FILE EXPLORER VERIFICATION ===');
+  const initialContent = '// Initial Demo File\nconst answer = 42;\n';
+  fs.mkdirSync(fixtureDir, { recursive: true });
   fs.writeFileSync(testFile, initialContent, 'utf8');
 
   let app;
   try {
-    const env = { ...process.env, IDE_TEST_MODE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
-    app = await electron.launch({ args: [root], env });
+    app = await electron.launch({ args: [root], env: { ...process.env, IDE_TEST_MODE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } });
+    const main = await waitForWindow(app, 'index.html');
+    await main.waitForSelector('.terminal-pane');
+    await main.evaluate((folder) => window.appInstance.fileExplorer.setRootDirectory(folder, true), root);
+    await main.getByTitle(path.join(root, 'package.json'), { exact: true }).waitFor();
+    const blockedWrite = await main.evaluate((target) => window.electronAPI.writeFile(target, 'blocked'), path.join(os.tmpdir(), `ide-blocked-${process.pid}.txt`));
+    assert.strictEqual(blockedWrite.success, false, 'renderer filesystem IPC wrote outside the opened project');
+    const escaped = await main.evaluate(() => window.appInstance.fileExplorer.escapeHtml('<img src=x onerror=alert(1)>'));
+    assert(!escaped.includes('<img'), 'file explorer did not escape markup in a filename');
+    console.log('PASS File Explorer rendered the selected project root.');
 
-    let page;
-    for (let i = 0; i < 20; i++) {
-      const windows = app.windows();
-      page = windows.find((w) => w.url().includes('index.html'));
-      if (page) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
+    await main.evaluate((filePath) => window.electronAPI.openEditorFile(filePath), testFile);
+    const editor = await waitForWindow(app, 'editor.html');
+    await editor.waitForSelector('.monaco-editor');
+    await editor.waitForFunction((filePath) => Boolean(window.editorApp?.manager?.openTabs?.get(filePath)?.model), testFile);
+    const opened = await editor.evaluate((filePath) => ({
+      value: window.editorApp.manager.openTabs.get(filePath).model.getValue(),
+      root: window.editorApp.rootDirectory
+    }), testFile);
+    assert.strictEqual(opened.value, initialContent);
+    assert.strictEqual(opened.root, root, 'opening a nested file must not change the project root');
+    assert.strictEqual(await main.evaluate(() => window.electronAPI.getProjectRoot()), root);
+    console.log('PASS Nested file opened in Monaco without changing the project root.');
 
-    if (!page) throw new Error('Could not find renderer window index.html');
-    await page.waitForLoadState('domcontentloaded');
-    console.log('PASS App launched & renderer window connected.');
+    const editedContent = `${initialContent}console.log(answer);\n`;
+    await editor.locator('.mode-toggle-pill').click();
+    await editor.evaluate((value) => window.editorApp.manager.editor.setValue(value), editedContent);
+    assert.strictEqual(await editor.evaluate((filePath) => window.editorApp.manager.openTabs.get(filePath).dirty, testFile), true);
+    await editor.evaluate(() => window.editorApp.save());
+    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), editedContent);
+    assert.strictEqual(await editor.evaluate((filePath) => window.editorApp.manager.openTabs.get(filePath).dirty, testFile), false);
+    console.log('PASS Dirty tracking and Save persisted the edited buffer.');
 
-    // Wait for AppController initialization
-    await page.waitForFunction(() => window.appInstance && window.appInstance.codeEditorManager, { timeout: 10000 });
-    console.log('PASS AppController, FileExplorer, and CodeEditorManager initialized.');
+    await editor.evaluate((filePath) => window.editorApp.manager.toggleMode(filePath), testFile);
+    const externalContent = `${editedContent}// external update\n`;
+    fs.writeFileSync(testFile, externalContent, 'utf8');
+    await editor.waitForFunction((value) => window.editorApp.manager.editor.getValue() === value, externalContent, { timeout: 5000 });
+    console.log('PASS View mode refreshed after an external disk change.');
 
-    // 1. Verification Item 1: File Tree Rendering & Working Directory Sync
-    console.log('\n--- Item 1: File Tree & Working Directory Sync ---');
-    await page.evaluate(async () => {
-      await window.appInstance.fileExplorer.setRootDirectory('/Volumes/LINUX MINT/vs code ', true);
-    });
-    await page.waitForSelector('.file-tree-list .tree-item', { timeout: 5000 });
-    const treeItems = await page.$$eval('.file-tree-list .tree-item', items => items.map(i => i.textContent.trim()));
-    console.log(`Found ${treeItems.length} items in file tree root. Samples:`, treeItems.slice(0, 5));
-    assert(treeItems.length > 0, 'File tree should render items');
-    console.log('PASS: File tree renders correctly matching working directory.');
-
-    // 2. Verification Item 2: Open File in Monaco Editor
-    console.log('\n--- Item 2: Open File & Monaco Editor Syntax Highlighting ---');
-    await page.evaluate((fPath) => {
-      window.appInstance.codeEditorManager.openFile(fPath);
-      window.appInstance.setViewMode('split');
-    }, testFile);
-
-    await page.waitForSelector('#code-editor-tabs .editor-tab', { timeout: 5000 });
-    const tabTitle = await page.$eval('.editor-tab-title', el => el.textContent.trim());
-    console.log(`Active editor tab: "${tabTitle}"`);
-    assert.strictEqual(tabTitle, 'temp_demo_file.js');
-
-    await page.waitForSelector('.monaco-editor', { timeout: 10000 });
-    const editorContent = await page.evaluate(() => {
-      return window.appInstance.codeEditorManager.editor.getValue();
-    });
-    assert.strictEqual(editorContent, initialContent);
-    console.log('PASS: File rendered in Monaco Editor with line numbers and syntax highlighting.');
-
-    // 3. Verification Item 3: Toggle View -> Edit, Change Content, Save to Disk
-    console.log('\n--- Item 3: View/Edit Mode Toggle & File Saving ---');
-    // Default mode should be 'view'
-    let currentMode = await page.evaluate((fPath) => {
-      return window.appInstance.codeEditorManager.openTabs.get(fPath).mode;
-    }, testFile);
-    assert.strictEqual(currentMode, 'view');
-    console.log(`Default mode is: ${currentMode}`);
-
-    // Toggle to 'edit'
-    await page.click('.mode-toggle-pill');
-    currentMode = await page.evaluate((fPath) => {
-      return window.appInstance.codeEditorManager.openTabs.get(fPath).mode;
-    }, testFile);
-    assert.strictEqual(currentMode, 'edit');
-    console.log(`Toggled mode to: ${currentMode}`);
-
-    // Modify in Monaco model & save
-    const editedContent = initialContent + `\nconsole.log("Hand edit saved!");\n`;
-    await page.evaluate((newVal) => {
-      window.appInstance.codeEditorManager.editor.setValue(newVal);
-      return window.appInstance.codeEditorManager.saveActiveFile();
-    }, editedContent);
-
-    await new Promise(r => setTimeout(r, 500));
-    const savedOnDisk = fs.readFileSync(testFile, 'utf8');
-    assert.strictEqual(savedOnDisk, editedContent);
-    console.log('PASS: Edited content successfully saved back to disk.');
-
-    // 4. Verification Item 4: Live Auto-Refresh in View Mode
-    console.log('\n--- Item 4: Live Auto-Refresh on Disk Edit ---');
-    // Toggle back to 'view' mode
-    await page.evaluate((fPath) => {
-      window.appInstance.codeEditorManager.toggleMode(fPath);
-    }, testFile);
-
-    // Simulate Agent in terminal pane editing file on disk
-    const agentAppendedContent = editedContent + `// Agent auto-refreshed line\n`;
-    fs.writeFileSync(testFile, agentAppendedContent, 'utf8');
-
-    // Wait for live file-watcher IPC event
-    await new Promise(r => setTimeout(r, 1200));
-    const liveContent = await page.evaluate(() => {
-      return window.appInstance.codeEditorManager.editor.getValue();
-    });
-    assert.strictEqual(liveContent, agentAppendedContent);
-    console.log('PASS: View mode auto-refreshed live content upon external disk modification without user action.');
-
-    // 5. Verification Item 5: Pane-linking Dropdown & Status Tag
-    console.log('\n--- Item 5: Pane-Linking Tag & Status Dot ---');
-    await page.selectOption('.pane-link-select', 'pane-1');
-    const linkedPaneId = await page.evaluate((fPath) => {
-      return window.appInstance.codeEditorManager.openTabs.get(fPath).linkedPaneId;
-    }, testFile);
-    assert.strictEqual(linkedPaneId, 'pane-1');
-
-    const dotVisible = await page.evaluate(() => {
-      const dot = document.querySelector('.pane-dot');
-      return dot && dot.style.display !== 'none';
-    });
-    assert.strictEqual(dotVisible, true);
-    console.log('PASS: Pane-linking dropdown associated tab with Shell 1 and rendered status dot.');
-
-    // 6. Verification Item 6: Split View Layout & Mode Persistence
-    console.log('\n--- Item 6: Split View Layout & Persistence ---');
-    await page.click('#btn-view-split');
-    let wrapperClass = await page.$eval('#workbench-split-wrapper', el => el.className);
-    assert(wrapperClass.includes('mode-split'));
-
-    await page.click('#btn-view-terminals');
-    wrapperClass = await page.$eval('#workbench-split-wrapper', el => el.className);
-    assert(wrapperClass.includes('mode-terminals'));
-
-    await page.click('#btn-view-editor');
-    wrapperClass = await page.$eval('#workbench-split-wrapper', el => el.className);
-    assert(wrapperClass.includes('mode-editor'));
-
-    const savedViewMode = await page.evaluate(() => localStorage.getItem('ide_view_mode'));
-    assert.strictEqual(savedViewMode, 'editor');
-    console.log('PASS: View mode layout toggles work cleanly and persist to localStorage.');
-
-    console.log('\n==================================================');
-    console.log('PASS ALL 6 CODE EDITOR VERIFICATION CHECKS PASSED!');
-    console.log('==================================================\n');
-
-  } catch (err) {
-    console.error('\nFAIL VERIFICATION FAILED:', err);
+    await editor.close();
+    await app.close();
+    app = null;
+    console.log('PASS CODE EDITOR VERIFICATION COMPLETE');
+  } catch (error) {
+    console.error('FAIL CODE EDITOR VERIFICATION:', error.stack || error);
     process.exitCode = 1;
   } finally {
-    if (fs.existsSync(testFile)) {
-      try { fs.unlinkSync(testFile); } catch (_) {}
-    }
-    if (app) {
-      await app.close();
-    }
+    if (app) try { await app.close(); } catch (_) {}
+    try { fs.rmSync(fixtureDir, { recursive: true, force: true }); } catch (_) {}
   }
 })();

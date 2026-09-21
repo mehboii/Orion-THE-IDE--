@@ -21,7 +21,10 @@ class WorkspaceStore {
 
   _writeAll(data) {
     try {
-      fs.writeFileSync(this.storePath, JSON.stringify(data, null, 2), 'utf-8');
+      const temporaryPath = `${this.storePath}.tmp`;
+      fs.mkdirSync(path.dirname(this.storePath), { recursive: true });
+      fs.writeFileSync(temporaryPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(temporaryPath, this.storePath);
       return true;
     } catch (err) {
       console.error('[WorkspaceStore] Error writing workspace store:', err);
@@ -42,8 +45,7 @@ class WorkspaceStore {
       updatedAt: new Date().toISOString()
     };
     data.activeWorkspace = name;
-    this._writeAll(data);
-    return true;
+    return this._writeAll(data);
   }
 
   loadWorkspace(name) {
@@ -58,8 +60,7 @@ class WorkspaceStore {
       if (data.activeWorkspace === name) {
         data.activeWorkspace = null;
       }
-      this._writeAll(data);
-      return true;
+      return this._writeAll(data);
     }
     return false;
   }

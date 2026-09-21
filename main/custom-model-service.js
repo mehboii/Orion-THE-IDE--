@@ -89,8 +89,11 @@ function ollamaLog(event, details = {}) {
   console.log(parts.join(' | '));
 }
 
-async function request(url, options = {}, timeout = CONNECT_TIMEOUT_MS) {
+async function request(url, options = {}, timeout = CONNECT_TIMEOUT_MS, externalSignal = null) {
   const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
@@ -106,10 +109,14 @@ async function request(url, options = {}, timeout = CONNECT_TIMEOUT_MS) {
     const err = new Error(`Server unreachable: ${detail}`);
     err.code = error.cause?.code || error.code;
     throw err;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
+  }
 }
 
 const pendingApprovals = new Map();
+const activeChats = new Map();
 const knownToolFamilies = /^(qwen3|qwen2\.5|llama3\.1|llama3\.2|mistral-nemo|mistral-small|command-r|hermes)/i;
 
 const AGENT_SYSTEM_PROMPT = 'You are an autonomous coding assistant inside an IDE. '
@@ -450,10 +457,22 @@ function parseToolCall(call) {
   try { return { name, args: typeof raw === 'string' ? JSON.parse(raw) : raw }; } catch { return { name, args: {}, parseError: 'Tool arguments were not valid JSON.' }; }
 }
 
-function requestApproval(webContents, payload) {
+function requestApproval(webContents, payload, signal) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { pendingApprovals.delete(payload.callId); resolve(false); }, 120_000);
-    pendingApprovals.set(payload.callId, (approved) => { clearTimeout(timer); resolve(Boolean(approved)); });
+    let settled = false;
+    const finish = (approved) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      pendingApprovals.delete(payload.callId);
+      resolve(Boolean(approved));
+    };
+    const onAbort = () => finish(false);
+    const timer = setTimeout(() => finish(false), 120_000);
+    pendingApprovals.set(payload.callId, finish);
+    if (signal?.aborted) finish(false);
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -528,7 +547,11 @@ async function readOllamaResponse(response, emit) {
   return { content, toolCalls };
 }
 
-async function streamOllamaAgent(webContents, paneId, requestId, model, messages, cwd, fullAutoApprove, maxIterations) {
+function sendToRenderer(webContents, channel, payload) {
+  if (!webContents.isDestroyed()) webContents.send(channel, payload);
+}
+
+async function streamOllamaAgent(webContents, paneId, requestId, model, messages, cwd, fullAutoApprove, maxIterations, signal) {
   const history = messages.map(({ role, content }) => ({ role, content }));
   // Inject a system prompt on the first turn if the caller didn't provide one,
   // so small models are guided toward using tool calls instead of narrating.
@@ -544,31 +567,32 @@ async function streamOllamaAgent(webContents, paneId, requestId, model, messages
     const requestBody = { model: liveModel.model, messages: history, stream: true, ...(agentic ? { tools: TOOL_SCHEMA } : {}) };
     ollamaLog('POST /api/chat', { endpoint: url, model: liveModel.model, agentic });
     customModelTrace('ollama.chat.request', { paneId, requestId, iteration, method: 'POST', url, body: requestBody, capturedModel: modelConnection(model), dispatchedModel: modelConnection(liveModel) });
-    const response = await request(url, { method: 'POST', headers: headers(liveModel), body: JSON.stringify(requestBody) }, CHAT_TIMEOUT_MS);
+    const response = await request(url, { method: 'POST', headers: headers(liveModel), body: JSON.stringify(requestBody) }, CHAT_TIMEOUT_MS, signal);
     if (!response.ok) throw await handleHttpError(response, liveModel.model);
-    const answer = await readOllamaResponse(response, (token) => webContents.send('custom-model:token', { paneId, requestId, token }));
+    const answer = await readOllamaResponse(response, (token) => sendToRenderer(webContents, 'custom-model:token', { paneId, requestId, token }));
     const hasTools = Boolean(answer.toolCalls && answer.toolCalls.length);
     history.push({
       role: 'assistant',
       content: hasTools ? '' : answer.content,
       ...(hasTools ? { tool_calls: answer.toolCalls } : {})
     });
-    if (!agentic || !hasTools) { webContents.send('custom-model:done', { paneId, requestId }); return; }
+    if (!agentic || !hasTools) { sendToRenderer(webContents, 'custom-model:done', { paneId, requestId }); return; }
     for (let index = 0; index < answer.toolCalls.length; index += 1) {
       const call = parseToolCall(answer.toolCalls[index]);
       const callId = `${requestId}:${iteration}:${index}`;
       const needsApproval = ['write_file', 'create_file', 'run_command'].includes(call.name) && !fullAutoApprove;
-      webContents.send('custom-model:tool-call', { paneId, requestId, callId, name: call.name, args: call.args, title: title(call.name, call.args), needsApproval });
+      sendToRenderer(webContents, 'custom-model:tool-call', { paneId, requestId, callId, name: call.name, args: call.args, title: title(call.name, call.args), needsApproval });
       let result;
       if (call.parseError) result = { success: false, ok: false, error: call.parseError };
-      else if (needsApproval && !(await requestApproval(webContents, { paneId, requestId, callId, name: call.name, args: call.args, title: title(call.name, call.args), needsApproval }))) result = { success: false, ok: false, error: 'User denied this tool call.' };
+      else if (needsApproval && !(await requestApproval(webContents, { paneId, requestId, callId, name: call.name, args: call.args, title: title(call.name, call.args), needsApproval }, signal))) result = { success: false, ok: false, error: 'User denied this tool call.' };
       else result = await executeTool(call.name, call.args, cwd);
-      webContents.send('custom-model:tool-result', { paneId, requestId, callId, result });
+      if (signal?.aborted) return;
+      sendToRenderer(webContents, 'custom-model:tool-result', { paneId, requestId, callId, result });
       history.push({ role: 'tool', tool_name: call.name, content: JSON.stringify(result) });
     }
   }
-  webContents.send('custom-model:max-iterations', { paneId, requestId, maxIterations });
-  webContents.send('custom-model:done', { paneId, requestId });
+  sendToRenderer(webContents, 'custom-model:max-iterations', { paneId, requestId, maxIterations });
+  sendToRenderer(webContents, 'custom-model:done', { paneId, requestId });
 }
 
 async function handleHttpError(response, configuredModel) {
@@ -588,54 +612,73 @@ async function handleHttpError(response, configuredModel) {
   return new Error(detail ? `HTTP ${response.status} ${response.statusText}${authHint}: ${detail}` : `HTTP ${response.status} ${response.statusText}${authHint}`);
 }
 
-async function streamChat(webContents, paneId, model, messages, cwd, fullAutoApprove = false, maxIterations = 25) {
+function streamChat(webContents, paneId, model, messages, cwd, fullAutoApprove = false, maxIterations = 25) {
   const requestId = randomUUID();
-  const initialLiveModel = resolveLiveModel(model);
-  customModelTrace('streamChat.enter', { paneId, requestId, capturedModel: modelConnection(model), initialLiveModel: modelConnection(initialLiveModel), messageCount: Array.isArray(messages) ? messages.length : 0 });
-  try {
-    await verifyModelAvailable(initialLiveModel);
-    const agentic = initialLiveModel.type === 'ollama' && isToolCapable(initialLiveModel);
-    // Only tool-enabled Ollama requests need a project root. Plain chat must
-    // remain usable before a folder is opened, just like OpenAI-compatible chat.
-    if (agentic) {
-      const projectCwd = projectRoot.resolveWorkingDirectory(cwd, 'model tool loop');
-      projectRoot.assertSpawnCwd(projectCwd, 'custom-model:tool-loop');
-      return await streamOllamaAgent(webContents, paneId, requestId, model, messages, projectCwd, fullAutoApprove, Math.min(Math.max(Number(maxIterations) || 25, 1), 100));
-    }
-    if (initialLiveModel.type === 'ollama') return await streamOllamaAgent(webContents, paneId, requestId, model, messages, cwd, fullAutoApprove, 1);
-    // Resolve again immediately before the non-Ollama request for the same live-settings guarantee.
-    const liveModel = resolveLiveModel(model);
-    const url = endpointUrl(liveModel, '/v1/chat/completions');
-    const body = { model: liveModel.model, messages, stream: true };
-    customModelTrace('openai.chat.request', { paneId, requestId, method: 'POST', url, body, capturedModel: modelConnection(model), dispatchedModel: modelConnection(liveModel) });
-    const response = await request(url, { method: 'POST', headers: headers(liveModel), body: JSON.stringify(body) }, CHAT_TIMEOUT_MS);
-    if (!response.ok) throw await handleHttpError(response, liveModel.model);
-    if (!response.body) throw new Error('The endpoint returned no response stream.');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let pending = '';
-    const emit = (token) => webContents.send('custom-model:token', { paneId, requestId, token });
-    while (true) {
-      const { done, value } = await reader.read();
-      pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const lines = pending.split('\n');
-      pending = lines.pop();
-      for (const line of lines) {
-        const data = line.startsWith('data:') ? line.slice(5).trim() : line.trim();
-        if (!data || data === '[DONE]') continue;
-        try {
-          const item = JSON.parse(data);
-          const token = model.type === 'ollama' ? item.message?.content : item.choices?.[0]?.delta?.content;
-          if (token) emit(token);
-        } catch (_) { /* incomplete/non-data SSE line */ }
+  const key = `${webContents.id}:${paneId}`;
+  activeChats.get(key)?.controller.abort();
+  const controller = new AbortController();
+  activeChats.set(key, { requestId, controller });
+
+  setImmediate(async () => {
+    const initialLiveModel = resolveLiveModel(model);
+    customModelTrace('streamChat.enter', { paneId, requestId, capturedModel: modelConnection(model), initialLiveModel: modelConnection(initialLiveModel), messageCount: Array.isArray(messages) ? messages.length : 0 });
+    try {
+      await verifyModelAvailable(initialLiveModel);
+      if (controller.signal.aborted) return;
+      const agentic = initialLiveModel.type === 'ollama' && isToolCapable(initialLiveModel);
+      if (agentic) {
+        const projectCwd = projectRoot.resolveWorkingDirectory(cwd, 'model tool loop');
+        projectRoot.assertSpawnCwd(projectCwd, 'custom-model:tool-loop');
+        await streamOllamaAgent(webContents, paneId, requestId, model, messages, projectCwd, fullAutoApprove, Math.min(Math.max(Number(maxIterations) || 25, 1), 100), controller.signal);
+        return;
       }
-      if (done) break;
+      if (initialLiveModel.type === 'ollama') {
+        await streamOllamaAgent(webContents, paneId, requestId, model, messages, cwd, fullAutoApprove, 1, controller.signal);
+        return;
+      }
+      const liveModel = resolveLiveModel(model);
+      const url = endpointUrl(liveModel, '/v1/chat/completions');
+      const body = { model: liveModel.model, messages, stream: true };
+      customModelTrace('openai.chat.request', { paneId, requestId, method: 'POST', url, body, capturedModel: modelConnection(model), dispatchedModel: modelConnection(liveModel) });
+      const response = await request(url, { method: 'POST', headers: headers(liveModel), body: JSON.stringify(body) }, CHAT_TIMEOUT_MS, controller.signal);
+      if (!response.ok) throw await handleHttpError(response, liveModel.model);
+      if (!response.body) throw new Error('The endpoint returned no response stream.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = pending.split('\n');
+        pending = lines.pop();
+        for (const line of lines) {
+          const data = line.startsWith('data:') ? line.slice(5).trim() : line.trim();
+          if (!data || data === '[DONE]') continue;
+          try {
+            const item = JSON.parse(data);
+            const token = item.choices?.[0]?.delta?.content;
+            if (token) sendToRenderer(webContents, 'custom-model:token', { paneId, requestId, token });
+          } catch (_) { /* incomplete/non-data SSE line */ }
+        }
+        if (done) break;
+      }
+      if (!controller.signal.aborted) sendToRenderer(webContents, 'custom-model:done', { paneId, requestId });
+    } catch (error) {
+      if (!controller.signal.aborted) sendToRenderer(webContents, 'custom-model:error', { paneId, requestId, error: error.message });
+    } finally {
+      if (activeChats.get(key)?.requestId === requestId) activeChats.delete(key);
     }
-    webContents.send('custom-model:done', { paneId, requestId });
-  } catch (error) {
-    webContents.send('custom-model:error', { paneId, requestId, error: error.message });
-  }
+  });
   return { requestId };
 }
 
-module.exports = { testConnection, fetchAvailableModels, streamChat, resolveApproval };
+function cancelChat(webContentsId, paneId) {
+  const key = `${webContentsId}:${paneId}`;
+  const active = activeChats.get(key);
+  if (!active) return false;
+  active.controller.abort();
+  activeChats.delete(key);
+  return true;
+}
+
+module.exports = { testConnection, fetchAvailableModels, streamChat, resolveApproval, cancelChat };

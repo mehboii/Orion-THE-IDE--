@@ -15,6 +15,30 @@ class CodeEditorManager {
     this.setupFileWatcherListener();
   }
 
+  escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  notifyDirtyState() {
+    const dirty = Array.from(this.openTabs.values()).some((tab) => tab.dirty);
+    window.electronAPI?.setEditorDirtyState?.(dirty);
+  }
+
+  attachModelTracking(tabData) {
+    if (!tabData?.model || tabData.changeDisposable) return;
+    tabData.changeDisposable = tabData.model.onDidChangeContent(() => {
+      if (tabData.suppressChanges || tabData.mode !== 'edit') return;
+      tabData.dirty = tabData.model.getValue() !== tabData.content;
+      this.renderTabs();
+      this.notifyDirtyState();
+    });
+  }
+
   initMonaco() {
     if (window.monaco) {
       this.onMonacoLoaded();
@@ -146,18 +170,24 @@ class CodeEditorManager {
     const res = await window.electronAPI.readFile(filePath);
     if (!res.success) return;
 
-    tabData.content = res.content;
-
-    // Auto-refresh in View mode live
-    if (tabData.mode === 'view') {
+    // View mode, and clean edit buffers, can safely follow disk changes. Dirty
+    // edit buffers retain the user's text and require confirmation on save.
+    if (tabData.mode === 'view' || !tabData.dirty) {
+      tabData.content = res.content;
+      tabData.externalConflict = false;
       if (tabData.model) {
         const scrollTop = (this.activeFilePath === filePath && this.editor) ? this.editor.getScrollTop() : 0;
+        tabData.suppressChanges = true;
         tabData.model.setValue(res.content);
+        tabData.suppressChanges = false;
         if (this.activeFilePath === filePath && this.editor) {
           this.editor.setScrollTop(scrollTop);
         }
       }
       this.showLiveRefreshPulse(filePath);
+    } else {
+      tabData.externalConflict = true;
+      this.renderTabs();
     }
   }
 
@@ -217,8 +247,14 @@ class CodeEditorManager {
       content: res.content,
       mode,
       model,
-      language
+      language,
+      dirty: false,
+      externalConflict: false,
+      suppressChanges: false,
+      changeDisposable: null
     };
+
+    this.attachModelTracking(tabData);
 
     this.openTabs.set(filePath, tabData);
     this.renderTabs();
@@ -235,6 +271,7 @@ class CodeEditorManager {
     if (this.editor && this.monacoReady) {
       if (!tabData.model && window.monaco) {
         tabData.model = this.getOrCreateModel(filePath, tabData.content, tabData.language);
+        this.attachModelTracking(tabData);
       }
       if (tabData.model) {
         this.editor.setModel(tabData.model);
@@ -247,6 +284,8 @@ class CodeEditorManager {
   closeTab(filePath) {
     const tabData = this.openTabs.get(filePath);
     if (tabData) {
+      if (tabData.dirty && !window.__IDE_TEST_MODE__ && !confirm(`Discard unsaved changes to ${tabData.name}?`)) return false;
+      try { tabData.changeDisposable?.dispose(); } catch (_) {}
       if (tabData.model) {
         try { tabData.model.dispose(); } catch (_) {}
       }
@@ -267,6 +306,8 @@ class CodeEditorManager {
     }
 
     this.renderTabs();
+    this.notifyDirtyState();
+    return true;
   }
 
   toggleMode(filePath) {
@@ -285,10 +326,18 @@ class CodeEditorManager {
     const tabData = this.openTabs.get(this.activeFilePath);
     if (!tabData || tabData.mode !== 'edit') return;
 
+    if (tabData.externalConflict && !window.__IDE_TEST_MODE__ && !confirm(`${tabData.name} changed on disk. Overwrite the external changes?`)) {
+      return { success: false, conflict: true };
+    }
+
     const currentContent = tabData.model ? tabData.model.getValue() : tabData.content;
     const res = await window.electronAPI.writeFile(this.activeFilePath, currentContent);
     if (res.success) {
       tabData.content = currentContent;
+      tabData.dirty = false;
+      tabData.externalConflict = false;
+      this.renderTabs();
+      this.notifyDirtyState();
       this.showSaveSuccessIndicator(this.activeFilePath);
     } else {
       alert(`Failed to save file: ${res.error}`);
@@ -307,6 +356,8 @@ class CodeEditorManager {
     const res = await window.electronAPI.writeFile(newPath, currentContent);
     if (res.success) {
       const oldPath = this.activeFilePath;
+      tabData.dirty = false;
+      tabData.externalConflict = false;
       this.closeTab(oldPath);
       await this.openFile(newPath, 'edit');
       this.showSaveSuccessIndicator(newPath);
@@ -339,7 +390,7 @@ class CodeEditorManager {
       tabEl.setAttribute('data-filepath', filePath);
 
       tabEl.innerHTML = `
-        <span class="editor-tab-title" title="${filePath}">${tabData.name}</span>
+        <span class="editor-tab-title" title="${this.escapeHtml(filePath)}">${this.escapeHtml(tabData.name)}${tabData.dirty ? ' ●' : ''}${tabData.externalConflict ? ' ⚠' : ''}</span>
         <button class="mode-toggle-pill ${tabData.mode}" type="button" title="Click to toggle View/Edit mode">
           ${tabData.mode === 'view' ? 'View' : 'Edit'}
         </button>

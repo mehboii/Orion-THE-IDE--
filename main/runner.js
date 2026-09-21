@@ -1,6 +1,7 @@
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFile } = require('child_process');
 const { shell } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const http = require('http');
 const net = require('net');
 const projectRoot = require('./project-root');
@@ -46,7 +47,7 @@ class RunnerManager {
     // 1. HTML -> Open in default browser
     if (ext === '.html' || ext === '.htm') {
       try {
-        const fileUrl = filePath.startsWith('file://') ? filePath : `file://${path.resolve(filePath)}`;
+        const fileUrl = filePath.startsWith('file://') ? filePath : pathToFileURL(path.resolve(filePath)).href;
         await shell.openExternal(fileUrl);
         return { success: true, isNotice: true, message: `Opened ${fileName} in default browser.` };
       } catch (err) {
@@ -77,7 +78,7 @@ class RunnerManager {
         args = [filePath];
       }
     } else if (ext === '.py') {
-      command = 'python3';
+      command = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
       args = [filePath];
     } else if (ext === '.ts') {
       // Check if ts-node is available
@@ -116,12 +117,29 @@ class RunnerManager {
 
     let child;
     try {
-      child = spawn(command, args, { cwd, env: { ...process.env, FORCE_COLOR: '1' } });
+      const childEnv = { ...process.env, NO_COLOR: '1' };
+      delete childEnv.FORCE_COLOR;
+      child = spawn(command, args, {
+        cwd,
+        env: childEnv,
+        detached: process.platform !== 'win32'
+      });
     } catch (err) {
       return { success: false, message: `Failed to spawn process: ${err.message}` };
     }
 
-    this.activeRuns.set(runId, { process: child, mode: 'run', filePath });
+    const runInfo = { process: child, mode: 'run', filePath, ownerId: webContents.id, completed: false };
+    this.activeRuns.set(runId, runInfo);
+
+    const finish = (exitCode, signal, error) => {
+      if (runInfo.completed) return;
+      runInfo.completed = true;
+      this.activeRuns.delete(runId);
+      if (!webContents.isDestroyed()) {
+        if (error) webContents.send('runner:data', { runId, text: `Failed to start process: ${error.message}\n`, stream: 'stderr' });
+        webContents.send('runner:exit', { runId, exitCode: exitCode ?? (signal || error ? 1 : 0), signal, error: error?.message });
+      }
+    };
 
     child.stdout.on('data', (data) => {
       if (!webContents.isDestroyed()) {
@@ -135,12 +153,8 @@ class RunnerManager {
       }
     });
 
-    child.on('exit', (exitCode, signal) => {
-      this.activeRuns.delete(runId);
-      if (!webContents.isDestroyed()) {
-        webContents.send('runner:exit', { runId, exitCode: exitCode ?? (signal ? 1 : 0), signal });
-      }
-    });
+    child.once('error', (error) => finish(1, null, error));
+    child.once('exit', (exitCode, signal) => finish(exitCode, signal));
 
     return { success: true, runId, label: `Output: ${fileName}` };
   }
@@ -152,13 +166,33 @@ class RunnerManager {
 
     let child;
     try {
-      child = spawn(command, args, { cwd, env: { ...process.env, FORCE_COLOR: '1' } });
+      const childEnv = { ...process.env, NO_COLOR: '1' };
+      delete childEnv.FORCE_COLOR;
+      child = spawn(command, args, {
+        cwd,
+        env: childEnv,
+        detached: process.platform !== 'win32'
+      });
     } catch (err) {
       return { success: false, message: `Failed to spawn debug process: ${err.message}` };
     }
 
-    const runInfo = { process: child, mode: 'debug', filePath, port, cdpWs: null };
+    const runInfo = { process: child, mode: 'debug', filePath, port, cdpWs: null, ownerId: webContents.id, completed: false, spawnError: null };
     this.activeRuns.set(runId, runInfo);
+
+    const finish = (exitCode, signal, error) => {
+      if (runInfo.completed) return;
+      runInfo.completed = true;
+      runInfo.spawnError = error || null;
+      if (runInfo.cdpWs) {
+        try { runInfo.cdpWs.close(); } catch (_) {}
+      }
+      this.activeRuns.delete(runId);
+      if (!webContents.isDestroyed()) {
+        if (error) webContents.send('runner:data', { runId, text: `Failed to start debugger: ${error.message}\n`, stream: 'stderr' });
+        webContents.send('runner:exit', { runId, exitCode: exitCode ?? (signal || error ? 1 : 0), signal, error: error?.message });
+      }
+    };
 
     child.stdout.on('data', (data) => {
       if (!webContents.isDestroyed()) {
@@ -170,23 +204,19 @@ class RunnerManager {
       if (!webContents.isDestroyed()) {
         webContents.send('runner:data', { runId, text: data.toString('utf8'), stream: 'stderr' });
       }
-    });
-
-    child.on('exit', (exitCode, signal) => {
-      if (runInfo.cdpWs) {
+      if (data.toString('utf8').includes('Waiting for the debugger to disconnect') && runInfo.cdpWs) {
         try { runInfo.cdpWs.close(); } catch (_) {}
       }
-      this.activeRuns.delete(runId);
-      if (!webContents.isDestroyed()) {
-        webContents.send('runner:exit', { runId, exitCode: exitCode ?? (signal ? 1 : 0), signal });
-      }
     });
+
+    child.once('error', (error) => finish(1, null, error));
+    child.once('exit', (exitCode, signal) => finish(exitCode, signal));
 
     // Wait for inspector WebSocket URL
     const wsUrl = await this.getInspectorWsUrl(port);
     if (!wsUrl) {
-      child.kill();
-      return { success: false, message: `Debugger failed to start on port ${port}.` };
+      this.terminateProcess(runInfo);
+      return { success: false, message: runInfo.spawnError ? `Failed to spawn debug process: ${runInfo.spawnError.message}` : `Debugger failed to start on port ${port}.` };
     }
 
     this.connectCdpWebSocket(webContents, runId, runInfo, wsUrl, filePath, breakpoints);
@@ -227,6 +257,7 @@ class RunnerManager {
     runInfo.cdpWs = ws;
     let msgId = 1;
     const pendingCallbacks = new Map();
+    let waitingForInitialBreak = true;
 
     const sendCdp = (method, params = {}) => {
       return new Promise((resolve) => {
@@ -251,13 +282,14 @@ class RunnerManager {
           // Monaco line numbers are 1-based, CDP line numbers are 0-based
           await sendCdp('Debugger.setBreakpointByUrl', {
             lineNumber: Math.max(0, line - 1),
-            urlRegex: '.*'
+            url: pathToFileURL(filePath).href
           });
         }
       }
 
-      // Resume execution from initial --inspect-brk break
-      await sendCdp('Debugger.resume');
+      // Release Node's --inspect-brk startup gate. The first paused event is
+      // handled below and resumed automatically unless it is a user breakpoint.
+      await sendCdp('Runtime.runIfWaitingForDebugger');
     };
 
     ws.onmessage = async (event) => {
@@ -299,6 +331,13 @@ class RunnerManager {
             }
           }
         }
+
+        if (waitingForInitialBreak && !breakpoints.includes(currentLine)) {
+          waitingForInitialBreak = false;
+          await sendCdp('Debugger.resume');
+          return;
+        }
+        waitingForInitialBreak = false;
 
         if (!webContents.isDestroyed()) {
           webContents.send('runner:debug-paused', {
@@ -347,17 +386,38 @@ class RunnerManager {
       try { runInfo.cdpWs.close(); } catch (_) {}
     }
 
-    if (runInfo.process && !runInfo.process.killed) {
-      try { runInfo.process.kill('SIGTERM'); } catch (_) {}
-      setTimeout(() => {
-        if (runInfo.process && !runInfo.process.killed) {
-          try { runInfo.process.kill('SIGKILL'); } catch (_) {}
-        }
-      }, 500);
-    }
+    this.terminateProcess(runInfo);
 
     this.activeRuns.delete(runId);
     return true;
+  }
+
+  terminateProcess(runInfo) {
+    const child = runInfo?.process;
+    if (!child || runInfo.completed) return;
+    if (process.platform === 'win32') {
+      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+      return;
+    }
+    try { process.kill(-child.pid, 'SIGTERM'); } catch (_) {
+      try { child.kill('SIGTERM'); } catch (_) {}
+    }
+    setTimeout(() => {
+      if (runInfo.completed || child.exitCode !== null) return;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {
+        try { child.kill('SIGKILL'); } catch (_) {}
+      }
+    }, 500);
+  }
+
+  stopAllForWebContents(ownerId) {
+    for (const [runId, runInfo] of [...this.activeRuns]) {
+      if (runInfo.ownerId === ownerId) this.stop(runId);
+    }
+  }
+
+  stopAll() {
+    for (const runId of [...this.activeRuns.keys()]) this.stop(runId);
   }
 }
 

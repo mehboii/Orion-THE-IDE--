@@ -1,12 +1,15 @@
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const ptyManager = require('./pty-manager');
+const runner = require('./runner');
 const { registerIpcHandlers } = require('./ipc-handlers');
 
 let mainWindow = null;
 let editorWindow = null;
 let pendingEditorFiles = [];
 let editorReady = false;
+let editorDirty = false;
+let editorWebContentsId = null;
 
 function getGlassWindowOptions() {
   return {
@@ -19,6 +22,22 @@ function getGlassWindowOptions() {
     closable: true,
     ...(process.platform === 'darwin' ? { vibrancy: 'under-window', visualEffectState: 'active' } : {}),
   };
+}
+
+function confirmEditorDiscard(detail) {
+  if (!editorDirty || !editorWindow || editorWindow.isDestroyed()) return true;
+  const choice = dialog.showMessageBoxSync(editorWindow, {
+    type: 'warning',
+    title: 'Unsaved changes',
+    message: 'The editor has unsaved changes.',
+    detail,
+    buttons: ['Cancel', 'Discard Changes'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  });
+  if (choice === 1) editorDirty = false;
+  return choice === 1;
 }
 
 
@@ -69,8 +88,13 @@ function openEditorFile(filePath) {
       preload: path.join(__dirname, '../preload/editor.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
+  });
+  editorWebContentsId = editorWindow.webContents.id;
+  editorDirty = false;
+  editorWindow.on('close', (event) => {
+    if (!confirmEditorDiscard('Cancel and save your work, or discard the unsaved changes and close the editor.')) event.preventDefault();
   });
   editorWindow.setMenu(createEditorMenu());
   editorWindow.loadFile(path.join(__dirname, '../renderer/editor.html'));
@@ -81,7 +105,10 @@ function openEditorFile(filePath) {
     files.forEach(sendFileToEditor);
   });
   editorWindow.on('closed', () => {
+    if (editorWebContentsId != null) runner.stopAllForWebContents(editorWebContentsId);
     editorWindow = null;
+    editorWebContentsId = null;
+    editorDirty = false;
     editorReady = false;
     pendingEditorFiles = [];
   });
@@ -105,7 +132,26 @@ function createEditorMenu() {
         { role: 'close' }
       ]
     },
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] }
+    { label: 'View', submenu: [
+      {
+        label: 'Reload',
+        accelerator: 'CmdOrCtrl+R',
+        click: () => {
+          if (!editorWindow || editorWindow.isDestroyed()) return;
+          if (!confirmEditorDiscard('Cancel and save your work, or discard the unsaved changes and reload the editor.')) return;
+          runner.stopAllForWebContents(editorWindow.webContents.id);
+          editorReady = false;
+          editorWindow.webContents.once('did-finish-load', () => {
+            editorReady = true;
+            const files = pendingEditorFiles;
+            pendingEditorFiles = [];
+            files.forEach(sendFileToEditor);
+          });
+          editorWindow.reload();
+        }
+      },
+      { role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }
+    ] }
   ]);
 }
 
@@ -122,7 +168,7 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   });
 
@@ -266,6 +312,14 @@ app.whenReady().then(() => {
     }
   });
 });
+
+ipcMain.on('editor:dirty-state', (event, dirty) => {
+  if (editorWindow && !editorWindow.isDestroyed() && event.sender.id === editorWindow.webContents.id) {
+    editorDirty = Boolean(dirty);
+  }
+});
+
+app.on('will-quit', () => runner.stopAll());
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

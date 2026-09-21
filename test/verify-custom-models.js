@@ -46,11 +46,15 @@ function mockServer() {
       const lastUserIndex = messages.map((m) => m.role).lastIndexOf('user');
       const toolResult = messages.slice(lastUserIndex + 1).find((m) => m.role === 'tool');
       if (!body.tools) return response(res, { content: 'Mock streamed answer' });
+      if (scenario.includes('slow response')) {
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ message: { content: 'STALE RESPONSE' }, done: true }) + '\n'); }, 750);
+      }
       if (scenario.includes('loop forever')) return response(res, tool('list_directory', { path: '.' }));
       if (!toolResult) {
         if (scenario.includes('list files')) return response(res, tool('list_directory', { path: '.' }));
         if (scenario.includes('nested write')) return response(res, tool('write_file', { path: 'src/components/Button.js', content: 'export default function Button() {}\n' }));
-        if (scenario.includes('command cwd')) return response(res, tool('run_command', { command: process.platform === 'win32' ? 'cd' : 'pwd' }));
+        if (scenario.includes('command cwd')) return response(res, tool('run_command', { command: 'node -e "console.log(process.cwd())"', cwd: 'src' }));
         if (scenario.includes('traversal')) return response(res, tool('write_file', { path: '../../etc/passwd', content: 'nope' }));
         if (scenario.includes('destructive')) return response(res, tool('run_command', { command: 'rm -rf /' }));
         if (scenario.includes('deny')) return response(res, tool('write_file', { path: 'denied.txt', content: 'should not write' }));
@@ -241,8 +245,14 @@ function mockServer() {
     const nestedFile = path.join(project, 'src', 'components', 'Button.js');
     if (fs.readFileSync(nestedFile, 'utf8') !== 'export default function Button() {}\n') throw new Error('nested tool write did not create expected file');
     console.log(`PASS nested write created ${nestedFile}`);
-    await chat.locator('textarea').fill('command cwd'); await chat.locator('.chat-composer button').click(); await chat.locator('.tool-approval .btn-primary').click(); await chat.locator('.tool-result').last().waitFor({ state: 'attached' });
-    console.log(`PASS run_command used opened-folder cwd ${project}`);
+    const priorToolResults = await chat.locator('.tool-result').count();
+    await chat.locator('textarea').fill('command cwd'); await chat.locator('.chat-composer button').click(); await chat.locator('.tool-approval .btn-primary').click();
+    const commandResult = chat.locator('.tool-result').nth(priorToolResults);
+    await commandResult.waitFor({ state: 'attached' });
+    const commandResultText = await commandResult.textContent();
+    const commandResultData = JSON.parse(commandResultText);
+    if (String(commandResultData.stdout || '').trim() !== path.join(project, 'src')) throw new Error(`run_command did not use requested subdirectory: ${commandResultText}`);
+    console.log(`PASS run_command accepted project subdirectory cwd ${path.join(project, 'src')}`);
     await page.getByText('generated', { exact: true }).click();
     await page.getByText('agent.txt', { exact: true }).waitFor();
     console.log('PASS explicit agent prompt created generated/agent.txt and Explorer auto-refresh shows it');
@@ -255,6 +265,17 @@ function mockServer() {
     await chat.locator('textarea').fill('deny'); await chat.locator('.chat-composer button').click(); await chat.locator('.tool-approval .btn-danger').click(); await chat.locator('.chat-message.assistant').filter({ hasText: 'User denied' }).waitFor(); if (fs.existsSync(path.join(project, 'denied.txt'))) throw new Error('denied tool wrote a file'); console.log('PASS explicit deny pauses and prevents write');
     await page.evaluate(({ model, cwd }) => window.appInstance.createPane({ id: 'loop-pane', label: 'Loop', customModel: { ...model, maxIterations: 3 }, cwd }), { model: agent, cwd: project });
     const loop = page.locator('[data-pane-id="loop-pane"]'); await loop.locator('.tool-approve-toggle input').check(); await loop.locator('textarea').fill('loop forever'); await loop.locator('.chat-composer button').click(); await loop.getByText('Max tool-call iterations reached (3)').waitFor(); console.log('PASS max iteration cap stops repeated tool calls');
+    await page.evaluate(() => window.appInstance.removePane('loop-pane'));
+
+    await page.evaluate((model) => window.appInstance.createPane({ id: 'cancel-pane', label: 'Cancel', customModel: model }), agent);
+    const cancelPane = page.locator('[data-pane-id="cancel-pane"]');
+    await cancelPane.locator('textarea').fill('slow response'); await cancelPane.locator('.chat-composer button').click();
+    await page.waitForFunction(() => window.appInstance.panes.get('cancel-pane')?.status === 'busy');
+    await page.evaluate(async (model) => { await window.appInstance.removePane('cancel-pane'); await window.appInstance.createPane({ id: 'cancel-pane', label: 'Replacement', customModel: model }); }, agent);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const replacementState = await page.evaluate(() => ({ status: window.appInstance.panes.get('cancel-pane')?.status, messages: window.appInstance.panes.get('cancel-pane')?.messages.length }));
+    if (replacementState.status !== 'running' || replacementState.messages !== 0) throw new Error(`stale custom-model request affected replacement pane: ${JSON.stringify(replacementState)}`);
+    console.log('PASS canceled custom-model request cannot update a replacement pane with the same ID');
 
     if (originalModels.length) {
       try { await page.evaluate((models) => window.electronAPI.saveCustomModels(models), originalModels); } catch (_) {}

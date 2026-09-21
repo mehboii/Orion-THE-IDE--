@@ -1,195 +1,102 @@
-const { _electron: electron } = require('/Volumes/LINUX MINT/vs code /node_modules/playwright');
+/* Regression coverage for editor synchronization, conflicts, Save As, and run cleanup. */
+const { _electron: electron } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const assert = require('assert');
 
-const root = '/Volumes/LINUX MINT/vs code ';
+const root = path.resolve(__dirname, '..');
 const editTestFile = path.join(root, 'test', 'temp_edit_test.js');
-const saveAsTestFile = path.join(root, 'test', 'temp_saveas_test.js');
+const longRunFile = path.join(root, 'test', 'temp_long_run.js');
+const missingInterpreterFile = path.join(root, 'test', 'temp_missing_interpreter.py');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForWindow(app, marker) {
+  for (let i = 0; i < 80; i += 1) {
+    const page = app.windows().find((candidate) => candidate.url().includes(marker));
+    if (page) return page;
+    await sleep(100);
+  }
+  throw new Error(`Window not found: ${marker}`);
+}
 
 (async () => {
-  console.log('=== STARTING EDITOR & TERMINAL NAVIGATION VERIFICATION ===\n');
-
-  // Prepare temp edit files
-  const initialText = `// Original Content\nconst x = 42;\nmodule.exports = { x };\n`;
+  console.log('=== STARTING EDITOR REGRESSION VERIFICATION ===');
+  const initialText = '// Original Content\nconst x = 42;\n';
+  const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ide-save-as-'));
+  const saveAsTestFile = path.join(externalDir, 'saved-copy.js');
+  const heartbeatFile = path.join(externalDir, 'heartbeat.txt');
   fs.writeFileSync(editTestFile, initialText, 'utf8');
-  if (fs.existsSync(saveAsTestFile)) fs.unlinkSync(saveAsTestFile);
+  fs.writeFileSync(longRunFile, `const fs = require('fs');\nsetInterval(() => fs.writeFileSync(${JSON.stringify(heartbeatFile)}, String(Date.now())), 50);\n`, 'utf8');
+  fs.writeFileSync(missingInterpreterFile, 'print("should not run")\n', 'utf8');
 
   let app;
   try {
-    const env = { ...process.env, IDE_TEST_MODE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
-    app = await electron.launch({ args: [root], env });
+    app = await electron.launch({ args: [root], env: { ...process.env, PYTHON: '__missing_python_for_ide_test__', IDE_TEST_MODE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } });
+    const main = await waitForWindow(app, 'index.html');
+    await main.waitForSelector('.terminal-pane');
+    await main.evaluate((folder) => window.appInstance.fileExplorer.setRootDirectory(folder, true), root);
+    await main.evaluate((filePath) => window.electronAPI.openEditorFile(filePath), editTestFile);
+    const editor = await waitForWindow(app, 'editor.html');
+    await editor.waitForSelector('.monaco-editor');
+    await editor.waitForFunction((filePath) => Boolean(window.editorApp?.manager?.openTabs?.get(filePath)?.model), editTestFile);
 
-    let page;
-    for (let i = 0; i < 20; i++) {
-      const windows = app.windows();
-      page = windows.find((w) => w.url().includes('index.html'));
-      if (page) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    if (!page) throw new Error('Could not find renderer window index.html');
-    await page.waitForLoadState('domcontentloaded');
-    console.log('PASS App launched & renderer connected.');
-
-    await page.waitForFunction(() => window.appInstance && window.appInstance.codeEditorManager, { timeout: 10000 });
-    console.log('PASS AppController, FileExplorer, and CodeEditorManager initialized.');
-
-    // ------------------------------------------------------------------------
-    // Verification 1: Open 5 real files from disk, check genuine content & syntax language
-    // ------------------------------------------------------------------------
-    console.log('\n--- Test 1: Opening 5 Real Files & Syntax Models ---');
-    const targetFiles = [
-      { rel: 'package.json', lang: 'json' },
-      { rel: 'main/index.js', lang: 'javascript' },
-      { rel: 'renderer/styles.css', lang: 'css' },
-      { rel: 'renderer/index.html', lang: 'html' },
-      { rel: 'README.md', lang: 'markdown' }
-    ];
-
-    for (const f of targetFiles) {
-      const absPath = path.join(root, f.rel);
-      const expectedDisk = fs.readFileSync(absPath, 'utf8');
-
-      await page.evaluate((p) => window.appInstance.codeEditorManager.openFile(p), absPath);
-      await new Promise(r => setTimeout(r, 300));
-
-      const loadedContent = await page.evaluate(() => window.appInstance.codeEditorManager.editor.getValue());
-      const detectedLang = await page.evaluate((p) => {
-        const tab = window.appInstance.codeEditorManager.openTabs.get(p);
-        return tab ? tab.language : null;
-      }, absPath);
-
-      assert.strictEqual(loadedContent, expectedDisk, `Content for ${f.rel} must match disk content exactly`);
-      assert.strictEqual(detectedLang, f.lang, `Language for ${f.rel} must be ${f.lang}`);
-      console.log(`  PASS Verified genuine disk content & language (${detectedLang}) for: ${f.rel}`);
-    }
-    console.log('PASS: 5 real files loaded genuine disk content with correct syntax language models.');
-
-    // ------------------------------------------------------------------------
-    // Verification 2: File > Open Folder via dialog
-    // ------------------------------------------------------------------------
-    console.log('\n--- Test 2: File > Open Folder Native Dialog ---');
-    await page.evaluate(async (p) => {
-      await window.appInstance.fileExplorer.setRootDirectory(p, true);
+    await editor.evaluate(async (folder) => {
+      await window.electronAPI.setTestDirectoryPath(folder);
+      await window.editorApp.openFolder();
     }, path.join(root, 'main'));
+    await main.waitForFunction((folder) => window.appInstance.fileExplorer.currentRootDir === folder, path.join(root, 'main'));
+    assert.strictEqual(await main.evaluate(() => window.electronAPI.getProjectRoot()), path.join(root, 'main'));
+    console.log('PASS Editor Open Folder synchronized the main Explorer and global project root.');
 
-    const rootHeaderTitle = await page.$eval('.file-tree-root-title', el => el.textContent.trim());
-    assert(rootHeaderTitle.includes('main'), 'Tree root header should update to selected folder "main"');
-    console.log(`PASS: Open Folder set root directory to: ${rootHeaderTitle}`);
+    await main.evaluate((folder) => window.appInstance.fileExplorer.setRootDirectory(folder, true), root);
+    await editor.evaluate((filePath) => window.editorApp.manager.switchTab(filePath), editTestFile);
+    await editor.locator('.mode-toggle-pill').click();
+    const localEdit = `${initialText}// unsaved local edit\n`;
+    await editor.evaluate((value) => window.editorApp.manager.editor.setValue(value), localEdit);
+    fs.writeFileSync(editTestFile, `${initialText}// external edit\n`, 'utf8');
+    await editor.waitForFunction((filePath) => window.editorApp.manager.openTabs.get(filePath)?.externalConflict === true, editTestFile);
+    assert.strictEqual(await editor.evaluate(() => window.editorApp.manager.editor.getValue()), localEdit, 'external change must not overwrite a dirty buffer');
+    await editor.evaluate(() => window.editorApp.save());
+    assert.strictEqual(fs.readFileSync(editTestFile, 'utf8'), localEdit);
+    console.log('PASS External changes are flagged without replacing unsaved editor content.');
 
-    // Restore root
-    await page.evaluate(async (p) => {
-      await window.appInstance.fileExplorer.setRootDirectory(p, true);
-    }, root);
-
-    // ------------------------------------------------------------------------
-    // Verification 3: Edit & Save to Disk
-    // ------------------------------------------------------------------------
-    console.log('\n--- Test 3: Edit File & Save (Ctrl+S) ---');
-    await page.evaluate((p) => window.appInstance.codeEditorManager.openFile(p), editTestFile);
-    await page.evaluate((p) => window.appInstance.codeEditorManager.toggleMode(p), editTestFile);
-
-    const editedText = initialText + `// Added Line via Editor Test\n`;
-    await page.evaluate((txt) => {
-      window.appInstance.codeEditorManager.editor.setValue(txt);
-    }, editedText);
-
-    await page.evaluate(() => window.appInstance.codeEditorManager.saveActiveFile());
-    await new Promise(r => setTimeout(r, 500));
-
-    const diskAfterSave = fs.readFileSync(editTestFile, 'utf8');
-    assert.strictEqual(diskAfterSave, editedText);
-    console.log('PASS: Saved edited file persisted to disk correctly.');
-
-    // ------------------------------------------------------------------------
-    // Verification 4: Save As...
-    // ------------------------------------------------------------------------
-    console.log('\n--- Test 4: Save As... ---');
-    const saveAsText = editedText + `// Save As New Target\n`;
-    await page.evaluate((txt) => {
-      window.appInstance.codeEditorManager.editor.setValue(txt);
-    }, saveAsText);
-
-    // Set target save path via IPC for test mode
-    await page.evaluate(async (newPath) => {
-      await window.electronAPI.setTestSaveAsPath(newPath);
+    const saveAsText = `${localEdit}// external Save As target\n`;
+    await editor.evaluate((value) => window.editorApp.manager.editor.setValue(value), saveAsText);
+    await editor.evaluate(async (target) => {
+      await window.electronAPI.setTestSaveAsPath(target);
+      await window.editorApp.saveAs();
     }, saveAsTestFile);
+    assert.strictEqual(fs.readFileSync(saveAsTestFile, 'utf8'), saveAsText);
+    console.log('PASS Explicit Save As authorization wrote and reopened a file outside the project root.');
 
-    await page.evaluate(() => window.appInstance.codeEditorManager.saveAsActiveFile());
-    await new Promise(r => setTimeout(r, 500));
+    await editor.evaluate((filePath) => window.editorApp.openFile(filePath), missingInterpreterFile);
+    await editor.evaluate(() => window.editorApp.executeRun('run'));
+    await editor.waitForFunction(() => document.getElementById('run-output-status')?.textContent.includes('Exited with code 1'));
+    assert.strictEqual(app.windows().length, 2, 'missing interpreter crashed an Electron window');
+    console.log('PASS Missing interpreter produced a handled run error without crashing Electron.');
 
-    assert(fs.existsSync(saveAsTestFile), 'New file should exist at Save As path');
-    const newFileContent = fs.readFileSync(saveAsTestFile, 'utf8');
-    assert.strictEqual(newFileContent, saveAsText);
+    await editor.evaluate((filePath) => window.editorApp.openFile(filePath), longRunFile);
+    await editor.waitForFunction((filePath) => window.editorApp.manager.activeFilePath === filePath, longRunFile);
+    await editor.evaluate(() => window.editorApp.executeRun('run'));
+    for (let i = 0; i < 40 && !fs.existsSync(heartbeatFile); i += 1) await sleep(50);
+    assert(fs.existsSync(heartbeatFile), 'long-running fixture did not start');
+    await editor.close();
+    await sleep(350);
+    const stoppedValue = fs.readFileSync(heartbeatFile, 'utf8');
+    await sleep(350);
+    assert.strictEqual(fs.readFileSync(heartbeatFile, 'utf8'), stoppedValue, 'run process continued after editor window closed');
+    console.log('PASS Closing the editor terminated its active Run process.');
 
-    // Original file should remain unchanged
-    const originalFileContent = fs.readFileSync(editTestFile, 'utf8');
-    assert.strictEqual(originalFileContent, editedText);
-    console.log('PASS: Save As created new file with edited content while leaving original file untouched.');
-
-    // ------------------------------------------------------------------------
-    // Verification 5: Running Terminal Panes Preservation Across View Switches
-    // ------------------------------------------------------------------------
-    console.log('\n--- Test 5: Terminal Panes Preservation Across View Modes ---');
-    await page.waitForFunction(() => window.appInstance.panes.size >= 4, { timeout: 10000 });
-    const initialPaneIds = await page.evaluate(() => Array.from(window.appInstance.panes.keys()));
-    console.log(`Initial active pane IDs (${initialPaneIds.length}):`, initialPaneIds);
-
-    // Send marker text to Pane 1 to verify buffer output survives view mode switches
-    const marker = `RUNNING_MARKER_${Date.now()}`;
-    await page.evaluate(({ paneId, text }) => {
-      window.electronAPI.writePty(paneId, `echo "${text}"\n`);
-    }, { paneId: initialPaneIds[0], text: marker });
-
-    await new Promise(r => setTimeout(r, 600));
-
-    // Switch to Editor Only view
-    console.log('Switching view mode to "Editor Only"...');
-    await page.evaluate(() => window.appInstance.setViewMode('editor'));
-    let isTerminalsVisible = await page.evaluate(() => {
-      const p = document.getElementById('terminal-split-panel');
-      return p && window.getComputedStyle(p).display !== 'none';
-    });
-    assert.strictEqual(isTerminalsVisible, false, 'Terminal panel should be hidden in Editor Only mode');
-
-    // Switch back via Activity Bar "Terminals" button
-    console.log('Clicking "Terminals" in Activity Bar...');
-    await page.click('.activity-item[data-activity="terminal"]');
-
-    isTerminalsVisible = await page.evaluate(() => {
-      const p = document.getElementById('terminal-split-panel');
-      return p && window.getComputedStyle(p).display !== 'none';
-    });
-    assert.strictEqual(isTerminalsVisible, true, 'Terminal panel should be restored when clicking Terminals in Activity Bar');
-
-    const finalPaneIds = await page.evaluate(() => Array.from(window.appInstance.panes.keys()));
-    assert.deepStrictEqual(finalPaneIds, initialPaneIds, 'Pane IDs must match initial set \u2014 zero panes destroyed or re-created');
-
-    // Check buffer content in Pane 1
-    const bufferContainsMarker = await page.evaluate(({ paneId, text }) => {
-      const pane = window.appInstance.panes.get(paneId);
-      if (!pane || !pane.terminal) return false;
-      for (let i = 0; i < pane.terminal.buffer.active.length; i++) {
-        const line = pane.terminal.buffer.active.getLine(i);
-        if (line && line.translateToString(true).includes(text)) return true;
-      }
-      return false;
-    }, { paneId: initialPaneIds[0], text: marker });
-
-    assert.strictEqual(bufferContainsMarker, true, 'Terminal buffer and PTY session output must remain intact');
-    console.log('PASS: All terminal panes, PTY processes, and scrollbacks remained intact without teardown across view mode switches.');
-
-    console.log('\n==================================================');
-    console.log('PASS ALL 5 BUG FIX VERIFICATION TESTS PASSED!');
-    console.log('==================================================\n');
-
-  } catch (err) {
-    console.error('\nFAIL VERIFICATION FAILED:', err);
+    await app.close();
+    app = null;
+    console.log('PASS EDITOR REGRESSION VERIFICATION COMPLETE');
+  } catch (error) {
+    console.error('FAIL EDITOR REGRESSION VERIFICATION:', error.stack || error);
     process.exitCode = 1;
   } finally {
-    if (fs.existsSync(editTestFile)) try { fs.unlinkSync(editTestFile); } catch (_) {}
-    if (fs.existsSync(saveAsTestFile)) try { fs.unlinkSync(saveAsTestFile); } catch (_) {}
-    if (app) await app.close();
+    if (app) try { await app.close(); } catch (_) {}
+    for (const file of [editTestFile, longRunFile, missingInterpreterFile]) try { fs.unlinkSync(file); } catch (_) {}
+    try { fs.rmSync(externalDir, { recursive: true, force: true }); } catch (_) {}
   }
 })();

@@ -94,6 +94,22 @@ class ProjectRoot {
     return resolvedCwd;
   }
 
+  assertContainedCwd(resolvedCwd, action) {
+    if (!this.currentWorkspaceRoot) {
+      throw new Error(`Blocked ${action}: no opened folder is available.`);
+    }
+    const root = fs.realpathSync(this.currentWorkspaceRoot);
+    const candidate = fs.realpathSync(resolvedCwd);
+    const relative = path.relative(root, candidate);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      const message = `Blocked ${action}: cwd ${JSON.stringify(candidate)} is outside opened folder ${JSON.stringify(root)}.`;
+      diagnosticLog(`[CWD MISMATCH] ${message}`);
+      throw new Error(message);
+    }
+    diagnosticLog(`[PROCESS SPAWN] action=${action} cwd=${JSON.stringify(candidate)} openedFolder=${JSON.stringify(root)}`);
+    return candidate;
+  }
+
   logToolPath(operation, resolvedPath) {
     diagnosticLog(`[MODEL TOOL] operation=${operation} path=${JSON.stringify(resolvedPath)} openedFolder=${JSON.stringify(this.currentWorkspaceRoot)}`);
   }

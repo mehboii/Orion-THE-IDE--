@@ -117,9 +117,7 @@ async function waitForWindow(app, marker) {
     if (!hasBp) throw new Error('FAIL: Breakpoint was not recorded in editor manager.');
 
     // Trigger Debug
-    await editor.evaluate(async () => {
-      await window.editorApp.executeRun('debug');
-    });
+    await editor.evaluate(async () => window.editorApp.executeRun('debug'));
 
     // Wait for Debug paused event
     await editor.waitForFunction(() => {
