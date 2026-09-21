@@ -86,11 +86,11 @@ async function command(page, paneId, text, expected) {
     console.log('NESTED EXPAND: nested/level-two/deep.txt shown');
 
     await page.evaluate((paneId) => window.appInstance.createPane({ id: paneId, label: 'Root A', agentId: 'shell' }), paneA);
-    await command(page, paneA, 'pwd -P', physicalProjectA);
-    console.log(`PWD -P A: ${physicalProjectA}`);
-    await command(page, paneA, 'ls -1 hello.txt', 'hello.txt');
+    await command(page, paneA, 'node -e "console.log(process.cwd())"', physicalProjectA);
+    console.log(`CWD A: ${physicalProjectA}`);
+    await command(page, paneA, 'node -e "console.log(require(\'fs\').existsSync(\'hello.txt\') ? \'hello.txt\' : \'missing\')"', 'hello.txt');
     console.log('LS A: hello.txt');
-    await command(page, paneA, 'printf pane-created > pane-created.txt; ls -1 pane-created.txt', 'pane-created.txt');
+    await command(page, paneA, 'node -e "require(\'fs\').writeFileSync(\'pane-created.txt\',\'pane-created\'); console.log(\'pane-created.txt\')"', 'pane-created.txt');
     await page.locator('#sidebar-file-tree').getByText('pane-created.txt', { exact: true }).waitFor();
     console.log('PANE CREATE: pane-created.txt exists in shell and Explorer auto-refresh');
     // Keep under the six-pane UI ceiling while testing a second fresh pane.
@@ -105,13 +105,13 @@ async function command(page, paneId, text, expected) {
     }, paneB);
     console.log(`NEW PANE B STATE: ${JSON.stringify(paneBState)}`);
     await sleep(1000); // wait for the new shell prompt after the PTY is attached
-    await command(page, paneB, `test "$(pwd -P)" = '${physicalProjectB}' && echo CWD_EXACT_PASS`, 'CWD_EXACT_PASS');
-    console.log(`PWD -P B exact match: ${physicalProjectB}`);
+    await command(page, paneB, 'node -e "console.log(process.cwd())"', physicalProjectB);
+    console.log(`CWD B exact match: ${physicalProjectB}`);
 
     // Shell 1 existed before Open Folder. Run Agent must restart it in the
     // current project rather than type its command into the old startup cwd.
     await page.evaluate(() => {
-      window.appInstance.agentsList = [{ id: 'cwd-probe', name: 'Cwd probe', command: 'pwd -P > .run-agent-cwd; echo RUN_AGENT_CWD_EXACT', env: {} }];
+      window.appInstance.agentsList = [{ id: 'cwd-probe', name: 'Cwd probe', command: 'node -e "require(\'fs\').writeFileSync(\'.run-agent-cwd\',process.cwd()); console.log(\'RUN_AGENT_CWD_EXACT\')"', env: {} }];
       return window.appInstance.executeAgent({ targetPaneId: 'pane-1', agentId: 'cwd-probe', scope: 'single' });
     });
     await waitForFile(path.join(physicalProjectB, '.run-agent-cwd'));
@@ -121,17 +121,23 @@ async function command(page, paneId, text, expected) {
     // Reproduce the former Run Agent failure: a fixed pane ID had an old tmux
     // session whose cwd differed from the newly opened project. The app must
     // replace it, then Run Agent's write-to-pane path must inherit projectB.
-    const runAgentPane = `run-agent-${runId}`;
-    const staleSession = `ide-${runAgentPane}`;
-    execFileSync('tmux', ['new-session', '-d', '-s', staleSession, '-c', projectA]);
-    await page.evaluate((paneId) => window.appInstance.createPane({ id: paneId, label: 'Run Agent', agentId: 'shell' }), runAgentPane);
-    await command(page, runAgentPane, `test "$(pwd -P)" = '${physicalProjectB}' && echo CWD_EXACT_PASS`, 'CWD_EXACT_PASS');
-    console.log(`RUN AGENT PANE PWD -P BEFORE COMMAND: ${physicalProjectB}`);
-    fs.unlinkSync(path.join(physicalProjectB, '.run-agent-cwd'));
-    await page.evaluate((paneId) => window.appInstance.executeAgent({ targetPaneId: paneId, agentId: 'cwd-probe', scope: 'single' }), runAgentPane);
-    await waitForFile(path.join(physicalProjectB, '.run-agent-cwd'));
-    if (fs.readFileSync(path.join(physicalProjectB, '.run-agent-cwd'), 'utf8').trim() !== physicalProjectB) throw new Error('Run Agent command cwd mismatch');
-    console.log(`RUN AGENT COMMAND PWD -P: ${physicalProjectB}`);
+    const tmuxStatus = await page.evaluate(() => window.electronAPI.checkTmux());
+    let staleSession = null;
+    if (tmuxStatus.available) {
+      const runAgentPane = `run-agent-${runId}`;
+      staleSession = `ide-${runAgentPane}`;
+      execFileSync('tmux', ['new-session', '-d', '-s', staleSession, '-c', projectA]);
+      await page.evaluate((paneId) => window.appInstance.createPane({ id: paneId, label: 'Run Agent', agentId: 'shell' }), runAgentPane);
+      await command(page, runAgentPane, 'node -e "console.log(process.cwd())"', physicalProjectB);
+      console.log(`RUN AGENT PANE CWD BEFORE COMMAND: ${physicalProjectB}`);
+      fs.unlinkSync(path.join(physicalProjectB, '.run-agent-cwd'));
+      await page.evaluate((paneId) => window.appInstance.executeAgent({ targetPaneId: paneId, agentId: 'cwd-probe', scope: 'single' }), runAgentPane);
+      await waitForFile(path.join(physicalProjectB, '.run-agent-cwd'));
+      if (fs.readFileSync(path.join(physicalProjectB, '.run-agent-cwd'), 'utf8').trim() !== physicalProjectB) throw new Error('Run Agent command cwd mismatch');
+      console.log(`RUN AGENT COMMAND CWD: ${physicalProjectB}`);
+    } else {
+      console.log('SKIP stale tmux-session replacement: tmux is not installed.');
+    }
 
     // The Explorer should update from a root-directory fs.watch notification,
     // without reopening the folder or explicitly calling render().
@@ -139,7 +145,7 @@ async function command(page, paneId, text, expected) {
     fs.writeFileSync(created, 'class StarPattern {}\n');
     await page.getByText('StarPattern.java', { exact: true }).waitFor();
     console.log('EXPLORER AUTO-REFRESH: StarPattern.java appeared');
-    try { execFileSync('tmux', ['kill-session', '-t', staleSession]); } catch (_) {}
+    if (staleSession) try { execFileSync('tmux', ['kill-session', '-t', staleSession]); } catch (_) {}
   } finally {
     try { await app.close(); } catch (_) {}
     fs.rmSync(parent, { recursive: true, force: true });

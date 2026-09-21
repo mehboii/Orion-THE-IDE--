@@ -166,15 +166,20 @@ class AppController {
       // Includes File > Open Folder initiated by the detached editor window.
       // Queue rather than overlap restarts when users switch folders quickly.
       this._rootSync = (this._rootSync || Promise.resolve())
-        .then(() => this.syncPanesToOpenedFolder(root))
+        .then(async () => {
+          if (root && this.fileExplorer && this.fileExplorer.currentRootDir !== root) {
+            await this.fileExplorer.setRootDirectory(root, true, false);
+          }
+          await this.syncPanesToOpenedFolder(root);
+        })
         .catch((error) => this.showBanner(`Could not apply opened folder to terminals: ${error.message}`, 'error'));
     });
-    window.electronAPI.onCustomModelToken(({ paneId, token }) => this.panes.get(paneId)?.receiveToken?.(token));
-    window.electronAPI.onCustomModelDone(({ paneId }) => this.panes.get(paneId)?.receiveDone?.());
-    window.electronAPI.onCustomModelError(({ paneId, error }) => this.panes.get(paneId)?.disconnect?.(error));
+    window.electronAPI.onCustomModelToken((data) => this.panes.get(data.paneId)?.receiveToken?.(data));
+    window.electronAPI.onCustomModelDone((data) => this.panes.get(data.paneId)?.receiveDone?.(data));
+    window.electronAPI.onCustomModelError(({ paneId, requestId, error }) => this.panes.get(paneId)?.disconnect?.(error, requestId));
     window.electronAPI.onCustomModelToolCall((data) => this.panes.get(data.paneId)?.showToolCall?.(data));
     window.electronAPI.onCustomModelToolResult((data) => this.panes.get(data.paneId)?.showToolResult?.(data));
-    window.electronAPI.onCustomModelMaxIterations((data) => this.panes.get(data.paneId)?.showMaxIterations?.(data.maxIterations));
+    window.electronAPI.onCustomModelMaxIterations((data) => this.panes.get(data.paneId)?.showMaxIterations?.(data.maxIterations, data.requestId));
   }
 
   async checkTmux() {
@@ -424,7 +429,7 @@ class AppController {
     const ok = window.__IDE_TEST_MODE__ || confirm(`Kill persistent tmux session for ${pane.label}?`);
     if (!ok) return;
 
-    if (pane instanceof CustomModelPane) { pane.disconnect('Stopped by user. Use Reconnect to continue.'); return; }
+    if (pane instanceof CustomModelPane) { pane.cancelActiveRequest(); pane.disconnect('Stopped by user. Use Reconnect to continue.'); return; }
     try {
       await window.electronAPI.destroyPty(paneId, true);
       pane.setStatus('exited');
@@ -594,7 +599,11 @@ class AppController {
       panes: paneConfigs
     };
 
-    await window.electronAPI.saveWorkspace(String(name).trim(), layout);
+    const saved = await window.electronAPI.saveWorkspace(String(name).trim(), layout);
+    if (!saved) {
+      this.showBanner(`Workspace "${String(name).trim()}" could not be saved. Check disk space and permissions.`, 'error');
+      return;
+    }
     this.activeWorkspaceName = String(name).trim();
     await this.loadWorkspaceOptions();
     this.workspaceSelect.value = this.activeWorkspaceName;
@@ -660,7 +669,11 @@ class AppController {
     }
     const ok = window.__IDE_TEST_MODE__ || confirm(`Delete saved workspace "${name}"?`);
     if (!ok) return;
-    await window.electronAPI.deleteWorkspace(name);
+    const deleted = await window.electronAPI.deleteWorkspace(name);
+    if (!deleted) {
+      this.showBanner(`Workspace "${name}" could not be deleted.`, 'error');
+      return;
+    }
     if (this.activeWorkspaceName === name) this.activeWorkspaceName = null;
     await this.loadWorkspaceOptions();
     this.updateFooter();

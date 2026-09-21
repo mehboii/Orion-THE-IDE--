@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test": "npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug",
     "rebuild": "npx @electron/rebuild -v 31.2.0",
     "postinstall": "npx @electron/rebuild -v 31.2.0",
     "dist": "npm run dist:linux",
@@ -13,9 +14,13 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --x64",
     "test:smoke": "node test/smoke.js",
+    "test:workdir": "node test/verify-workdir-consistency.js",
     "test:external-cwd": "node test/verify-external-cwd.js",
     "test:custom-models": "node test/verify-custom-models.js",
-    "test:editor-window": "node test/verify_editor_window.js"
+    "test:code-editor": "node test/verify_code_editor.js",
+    "test:editor-fixes": "node test/verify_editor_fixes.js",
+    "test:editor-window": "node test/verify_editor_window.js",
+    "test:run-debug": "node test/verify_run_debug_and_cwd.js"
   },
   "keywords": [
     "electron",

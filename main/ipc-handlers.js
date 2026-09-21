@@ -94,6 +94,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
   ipcMain.handle('custom-models:fetch-models', (event, model) => customModelService.fetchAvailableModels(model));
   ipcMain.handle('custom-models:chat', (event, payload) => customModelService.streamChat(event.sender, payload.paneId, payload.model, payload.messages, payload.cwd, payload.fullAutoApprove, payload.maxIterations));
   ipcMain.handle('custom-models:tool-decision', (event, { callId, approved }) => customModelService.resolveApproval(callId, approved));
+  ipcMain.handle('custom-models:cancel', (event, { paneId }) => customModelService.cancelChat(event.sender.id, paneId));
 
   // Keep terminal clipboard access inside Electron rather than relying on the
   // renderer having browser clipboard permissions.
@@ -141,10 +142,12 @@ function registerIpcHandlers({ openEditorFile } = {}) {
   });
 
   ipcMain.handle('test:set-save-as-path', (event, targetPath) => {
+    if (process.env.IDE_TEST_MODE !== '1') throw new Error('Test-only IPC is disabled.');
     global.__TEST_SAVE_AS_PATH__ = targetPath;
     return true;
   });
   ipcMain.handle('test:set-directory-path', (event, targetPath) => {
+    if (process.env.IDE_TEST_MODE !== '1') throw new Error('Test-only IPC is disabled.');
     global.__TEST_DIRECTORY_PATH__ = targetPath;
     return true;
   });
@@ -160,7 +163,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     if (process.env.IDE_TEST_MODE === '1' && global.__TEST_SAVE_AS_PATH__) {
       const p = global.__TEST_SAVE_AS_PATH__;
       global.__TEST_SAVE_AS_PATH__ = null;
-      return p;
+      return approveExternalPath(event.sender, p);
     }
     const window = event.sender.getOwnerBrowserWindow();
     const result = await dialog.showSaveDialog(window, {
@@ -169,7 +172,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     });
 
     if (!result.canceled && result.filePath) {
-      return result.filePath;
+      return approveExternalPath(event.sender, result.filePath);
     }
     return null;
   });
@@ -178,6 +181,8 @@ function registerIpcHandlers({ openEditorFile } = {}) {
   const fs = require('fs');
   const path = require('path');
   const fileWatchers = new Map();
+  const watcherCleanupRegistered = new Set();
+  const approvedExternalPaths = new Map();
   const watcherKey = (sender, filePath) => `${sender.id}:${filePath}`;
   const closeSenderWatchers = (sender) => {
     const prefix = `${sender.id}:`;
@@ -187,17 +192,54 @@ function registerIpcHandlers({ openEditorFile } = {}) {
         fileWatchers.delete(key);
       }
     }
+    watcherCleanupRegistered.delete(sender.id);
+    approvedExternalPaths.delete(sender.id);
   };
 
-  function resolveFsPath(targetPath) {
+  function isInside(root, target) {
+    const relative = path.relative(root, target);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  }
+
+  function nearestExistingPath(target) {
+    let probe = target;
+    while (!fs.existsSync(probe)) {
+      const parent = path.dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+    return probe;
+  }
+
+  function approveExternalPath(sender, targetPath) {
+    const target = path.resolve(targetPath);
+    if (!approvedExternalPaths.has(sender.id)) approvedExternalPaths.set(sender.id, new Set());
+    approvedExternalPaths.get(sender.id).add(target);
+    return target;
+  }
+
+  function resolveFsPath(sender, targetPath) {
     if (!targetPath) throw new Error('Could not resolve working directory: no file path was provided.');
-    if (path.isAbsolute(targetPath)) return targetPath;
-    return path.resolve(projectRoot.resolveWorkingDirectory(null, 'filesystem operation'), targetPath);
+    const root = projectRoot.resolveWorkingDirectory(null, 'filesystem operation');
+    const target = path.resolve(root, targetPath);
+    const approved = approvedExternalPaths.get(sender.id)?.has(target);
+    if (!isInside(root, target) && !approved) {
+      throw new Error(`Filesystem path is outside the opened folder: ${target}`);
+    }
+    if (!approved) {
+      const realRoot = fs.realpathSync(root);
+      const existing = nearestExistingPath(target);
+      const realExisting = fs.realpathSync(existing);
+      if (!isInside(realRoot, realExisting)) {
+        throw new Error(`Filesystem path resolves outside the opened folder: ${target}`);
+      }
+    }
+    return target;
   }
 
   ipcMain.handle('fs:read-dir', async (event, dirPath) => {
     try {
-      const target = resolveFsPath(dirPath);
+      const target = resolveFsPath(event.sender, dirPath);
       if (!target || !fs.existsSync(target)) return [];
       const entries = await fs.promises.readdir(target, { withFileTypes: true });
       const results = entries.map(entry => ({
@@ -222,7 +264,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
 
   ipcMain.handle('fs:read-file', async (event, filePath) => {
     try {
-      const target = resolveFsPath(filePath);
+      const target = resolveFsPath(event.sender, filePath);
       const content = await fs.promises.readFile(target, { encoding: 'utf8' });
       return { success: true, content };
     } catch (err) {
@@ -232,7 +274,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
 
   ipcMain.handle('fs:write-file', async (event, { filePath, content }) => {
     try {
-      const target = resolveFsPath(filePath);
+      const target = resolveFsPath(event.sender, filePath);
       console.log(`[FS WRITE ASSERTION] IPC fs:write-file writing to path: ${target}`);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, content, { encoding: 'utf8' });
@@ -245,21 +287,32 @@ function registerIpcHandlers({ openEditorFile } = {}) {
   // fs.watch accepts both a file and a directory. The Explorer watches its
   // project root to receive structural changes made by terminal agents.
   ipcMain.handle('fs:watch-file', (event, filePath) => {
-    const key = watcherKey(event.sender, filePath);
-    if (!filePath || fileWatchers.has(key)) return true;
+    if (!filePath) return false;
     try {
+      const target = resolveFsPath(event.sender, filePath);
+      const key = watcherKey(event.sender, target);
+      if (fileWatchers.has(key)) return true;
       let debounceTimer = null;
-      const watcher = fs.watch(filePath, (eventType) => {
+      const watcher = fs.watch(target, () => {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           const win = event.sender.getOwnerBrowserWindow();
           if (win && !win.isDestroyed()) {
-            win.webContents.send('file-changed', { filePath });
+            win.webContents.send('file-changed', { filePath: target });
           }
         }, 150);
       });
+      watcher.on('error', (error) => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        fileWatchers.delete(key);
+        console.error('fs watcher error:', error);
+        try { watcher.close(); } catch (_) {}
+      });
       fileWatchers.set(key, watcher);
-      event.sender.once('destroyed', () => closeSenderWatchers(event.sender));
+      if (!watcherCleanupRegistered.has(event.sender.id)) {
+        watcherCleanupRegistered.add(event.sender.id);
+        event.sender.once('destroyed', () => closeSenderWatchers(event.sender));
+      }
       return true;
     } catch (err) {
       console.error('fs:watch-file error:', err);
@@ -268,7 +321,9 @@ function registerIpcHandlers({ openEditorFile } = {}) {
   });
 
   ipcMain.handle('fs:unwatch-file', (event, filePath) => {
-    const key = watcherKey(event.sender, filePath);
+    let target;
+    try { target = resolveFsPath(event.sender, filePath); } catch (_) { target = path.resolve(String(filePath || '')); }
+    const key = watcherKey(event.sender, target);
     if (fileWatchers.has(key)) {
       try {
         fileWatchers.get(key).close();

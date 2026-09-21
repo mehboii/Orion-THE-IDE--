@@ -7,6 +7,8 @@ class EditorApp {
     this.rootLabel = document.getElementById('editor-root-label');
     this.rootDirectory = null;
     this.currentRunId = null;
+    this.pendingRunLaunches = 0;
+    this.earlyRunEvents = new Map();
 
     // DOM Elements
     this.btnSave = document.getElementById('btn-editor-save');
@@ -126,68 +128,78 @@ class EditorApp {
 
     // Runner IPC Listeners
     if (window.electronAPI.onRunnerData) {
-      window.electronAPI.onRunnerData(({ runId, text }) => {
-        if (runId === this.currentRunId && this.runOutputContent) {
-          this.runOutputContent.textContent += text;
-          this.runOutputContent.scrollTop = this.runOutputContent.scrollHeight;
-        }
-      });
+      window.electronAPI.onRunnerData((data) => this.routeRunEvent('data', data));
     }
 
     if (window.electronAPI.onRunnerExit) {
-      window.electronAPI.onRunnerExit(({ runId, exitCode }) => {
-        if (runId === this.currentRunId) {
-          this.runOutputStatus.textContent = `[Exited with code ${exitCode}]`;
-          this.btnStop.classList.add('hidden');
-          this.debugToolbarControls.classList.add('hidden');
-          this.debugVariablesPanel.classList.add('hidden');
-          this.manager.clearPausedLine();
-          this.currentRunId = null;
-        }
-      });
+      window.electronAPI.onRunnerExit((data) => this.routeRunEvent('exit', data));
     }
 
     if (window.electronAPI.onDebugPaused) {
-      window.electronAPI.onDebugPaused(({ runId, lineNumber, variables }) => {
-        if (runId === this.currentRunId) {
-          this.runOutputStatus.textContent = `[Paused on line ${lineNumber}]`;
-          this.debugToolbarControls.classList.remove('hidden');
-          this.debugVariablesPanel.classList.remove('hidden');
-          if (this.manager.activeFilePath) {
-            this.manager.highlightPausedLine(this.manager.activeFilePath, lineNumber);
-          }
-          this.renderVariables(variables || []);
-        }
-      });
+      window.electronAPI.onDebugPaused((data) => this.routeRunEvent('paused', data));
     }
 
     if (window.electronAPI.onDebugResumed) {
-      window.electronAPI.onDebugResumed(({ runId }) => {
-        if (runId === this.currentRunId) {
-          this.runOutputStatus.textContent = `[Running\u2026]`;
-          this.manager.clearPausedLine();
-        }
-      });
+      window.electronAPI.onDebugResumed((data) => this.routeRunEvent('resumed', data));
     }
+  }
+
+  routeRunEvent(type, data) {
+    if (data.runId === this.currentRunId) {
+      this.applyRunEvent(type, data);
+    } else if (this.pendingRunLaunches > 0) {
+      if (!this.earlyRunEvents.has(data.runId)) this.earlyRunEvents.set(data.runId, []);
+      this.earlyRunEvents.get(data.runId).push({ type, data });
+    }
+  }
+
+  applyRunEvent(type, data) {
+    if (type === 'data' && this.runOutputContent) {
+      this.runOutputContent.textContent += data.text;
+      this.runOutputContent.scrollTop = this.runOutputContent.scrollHeight;
+    } else if (type === 'exit') {
+      this.runOutputStatus.textContent = `[Exited with code ${data.exitCode}]`;
+      this.btnStop.classList.add('hidden');
+      this.debugToolbarControls.classList.add('hidden');
+      this.debugVariablesPanel.classList.add('hidden');
+      this.manager.clearPausedLine();
+      this.currentRunId = null;
+    } else if (type === 'paused') {
+      this.runOutputStatus.textContent = `[Paused on line ${data.lineNumber}]`;
+      this.debugToolbarControls.classList.remove('hidden');
+      this.debugVariablesPanel.classList.remove('hidden');
+      if (this.manager.activeFilePath) this.manager.highlightPausedLine(this.manager.activeFilePath, data.lineNumber);
+      this.renderVariables(data.variables || []);
+    } else if (type === 'resumed') {
+      this.runOutputStatus.textContent = '[Running\u2026]';
+      this.manager.clearPausedLine();
+    }
+  }
+
+  replayEarlyRunEvents(runId) {
+    const events = this.earlyRunEvents.get(runId) || [];
+    this.earlyRunEvents.delete(runId);
+    for (const event of events) this.applyRunEvent(event.type, event.data);
   }
 
   async openFile(filePath) {
     await this.manager.openFile(filePath);
-    this.rootDirectory = filePath.replace(/[\\/][^\\/]+$/, '');
-    this.rootLabel.textContent = this.rootDirectory;
-    if (window.electronAPI && window.electronAPI.setProjectRoot) {
-      await window.electronAPI.setProjectRoot(this.rootDirectory);
+    const root = await window.electronAPI.getProjectRoot?.();
+    if (root) {
+      this.rootDirectory = root;
+      this.rootLabel.textContent = root;
     }
   }
 
   async openFolder() {
     const folder = await window.electronAPI.selectDirectory(this.rootDirectory || undefined);
     if (folder) {
-      this.rootDirectory = folder;
-      this.rootLabel.textContent = folder;
       if (window.electronAPI && window.electronAPI.setProjectRoot) {
-        await window.electronAPI.setProjectRoot(folder);
+        this.rootDirectory = await window.electronAPI.setProjectRoot(folder);
+      } else {
+        this.rootDirectory = folder;
       }
+      this.rootLabel.textContent = this.rootDirectory;
     }
   }
 
@@ -202,9 +214,16 @@ class EditorApp {
     }
 
     const breakpoints = this.manager.getBreakpoints(filePath);
-    const result = await window.electronAPI.executeRun({ filePath, mode, breakpoints });
+    this.pendingRunLaunches += 1;
+    let result;
+    try {
+      result = await window.electronAPI.executeRun({ filePath, mode, breakpoints });
+    } finally {
+      this.pendingRunLaunches = Math.max(0, this.pendingRunLaunches - 1);
+    }
 
     if (!result.success) {
+      if (this.pendingRunLaunches === 0) this.earlyRunEvents.clear();
       if (!window.__IDE_TEST_MODE__) {
         if (result.isNotice) {
           alert(result.message);
@@ -228,6 +247,12 @@ class EditorApp {
     this.debugToolbarControls.classList.add('hidden');
     this.debugVariablesPanel.classList.add('hidden');
     this.manager.clearPausedLine();
+    this.replayEarlyRunEvents(result.runId);
+    if (this.pendingRunLaunches === 0) {
+      for (const runId of [...this.earlyRunEvents.keys()]) {
+        if (runId !== this.currentRunId) this.earlyRunEvents.delete(runId);
+      }
+    }
     return result;
   }
 

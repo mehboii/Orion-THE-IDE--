@@ -105,7 +105,7 @@ async function executeTool(name, rawArgs, cwd) {
       const commandCwd = resolvedPath(root, args.cwd || '.');
       projectRoot.logToolPath('run_command', commandCwd);
       await realPathInside(root, commandCwd);
-      projectRoot.assertSpawnCwd(commandCwd, 'custom-model:run_command');
+      projectRoot.assertContainedCwd(commandCwd, 'custom-model:run_command');
       try {
         const result = await execAsync(String(args.command), { cwd: commandCwd, timeout: 30_000, maxBuffer: 1024 * 1024 });
         return { success: true, ok: true, stdout: result.stdout, stderr: result.stderr, exitCode: 0 };

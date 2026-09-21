@@ -60,6 +60,15 @@ async function verifyLiveCustomEndpoint(page) {
   const paneCount = await run.page.locator('.terminal-pane').count();
   if (paneCount !== 4) throw new Error(`Expected 4 default panes, received ${paneCount}`);
   console.log(`PASS grid rendered ${paneCount} panes`);
+  const workspaceName = `__smoke_workspace_${process.pid}`;
+  const workspaceResult = await run.page.evaluate(async ({ name }) => {
+    const saved = await window.electronAPI.saveWorkspace(name, { preset: '2x3', panes: [] });
+    const loaded = await window.electronAPI.loadWorkspace(name);
+    const deleted = await window.electronAPI.deleteWorkspace(name);
+    return { saved, loaded, deleted };
+  }, { name: workspaceName });
+  if (!workspaceResult.saved || !workspaceResult.deleted || workspaceResult.loaded?.preset !== '2x3') throw new Error(`workspace persistence failed: ${JSON.stringify(workspaceResult)}`);
+  console.log('PASS workspace persistence reports real write/delete results');
   await verifyLiveCustomEndpoint(run.page);
   await run.page.evaluate(() => window.appInstance.createPane({ id: 'smoke-pty', label: 'Smoke PTY', agentId: 'shell' }));
   await run.page.evaluate(() => window.electronAPI.writePty('smoke-pty', 'echo hello-sandbox-test\r'));
@@ -67,6 +76,13 @@ async function verifyLiveCustomEndpoint(page) {
   await run.page.evaluate(() => window.electronAPI.destroyPty('smoke-pty', true)); await sleep(250);
   if (tmuxHas('ide-smoke-pty')) throw new Error('tmux session survived requested kill');
   console.log('PASS pane kill terminated underlying tmux session');
+  const tmuxStatus = await run.page.evaluate(() => window.electronAPI.checkTmux());
+  if (!tmuxStatus.available) {
+    console.log('SKIP tmux persistence/reattach checks: tmux is not installed; fallback PTY mode is active.');
+    await run.app.close();
+    console.log('PASS smoke suite complete');
+    return;
+  }
   await run.page.evaluate(() => window.appInstance.createPane({ id: 'smoke-persist', label: 'Persistent', agentId: 'shell' }));
   if (!tmuxHas('ide-smoke-persist')) throw new Error('persistent tmux session was not created');
   await run.app.close(); if (!tmuxHas('ide-smoke-persist')) throw new Error('tmux session did not survive app close');

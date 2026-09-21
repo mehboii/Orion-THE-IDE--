@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   executeRun: (payload) => ipcRenderer.invoke('runner:execute', payload),
   stopRun: (runId) => ipcRenderer.invoke('runner:stop', runId),
   sendDebugCommand: (runId, command) => ipcRenderer.invoke('runner:debug-command', { runId, command }),
+  setEditorDirtyState: (dirty) => ipcRenderer.send('editor:dirty-state', Boolean(dirty)),
   onRunnerData: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('runner:data', handler);

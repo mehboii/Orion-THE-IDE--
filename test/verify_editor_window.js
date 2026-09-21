@@ -28,7 +28,7 @@ async function waitForWindow(app, marker) {
     console.log('PASS main toolbar has no Terminals/Split/Editor toggle');
 
     await main.evaluate((folder) => window.appInstance.fileExplorer.setRootDirectory(folder, true), path.dirname(fixture));
-    await main.locator(`.tree-label[title="${fixture}"]`).click();
+    await main.getByTitle(fixture, { exact: true }).click();
     const editor = await waitForWindow(app, 'editor.html');
     await editor.waitForSelector('.monaco-editor');
     if (app.windows().length !== 2) throw new Error(`expected 2 windows after first file, got ${app.windows().length}`);
@@ -38,7 +38,7 @@ async function waitForWindow(app, marker) {
     }, fixture);
     console.log('PASS first file opened in separate editor window (count 2) with real content');
 
-    await main.locator(`.tree-label[title="${secondFixture}"]`).click();
+    await main.getByTitle(secondFixture, { exact: true }).click();
     await editor.waitForFunction(() => window.editorApp.manager.openTabs.size === 2);
     if (app.windows().length !== 2) throw new Error(`expected 2 windows after second file, got ${app.windows().length}`);
     console.log('PASS second file added as an editor tab (count remains 2)');

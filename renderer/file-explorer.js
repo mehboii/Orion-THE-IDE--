@@ -50,11 +50,11 @@ class FileExplorer {
     }
   }
 
-  async setRootDirectory(dirPath, force = false) {
+  async setRootDirectory(dirPath, force = false, publishRootChange = true) {
     if (!dirPath) return;
     // The main process returns its canonical ProjectRoot; this tree is a view
     // of that exact value instead of maintaining a second root spelling.
-    const canonicalRoot = await this.onRootChangeCallback?.(dirPath) || dirPath;
+    const canonicalRoot = publishRootChange ? (await this.onRootChangeCallback?.(dirPath) || dirPath) : dirPath;
     if (this.currentRootDir === canonicalRoot && !force) return;
 
     if (this.watchedRootDir && this.watchedRootDir !== canonicalRoot) {
@@ -96,7 +96,7 @@ class FileExplorer {
     header.innerHTML = `
       <span class="tree-chevron ${this.expandedDirs.has(this.currentRootDir) ? 'is-expanded' : ''}" aria-hidden="true"></span>
       <span class="file-icon folder-icon ${this.expandedDirs.has(this.currentRootDir) ? 'is-open' : ''}" aria-hidden="true"></span>
-      <span class="file-tree-root-title" title="${this.currentRootDir}"><strong>${folderName}</strong></span>
+      <span class="file-tree-root-title" title="${this.escapeHtml(this.currentRootDir)}"><strong>${this.escapeHtml(folderName)}</strong></span>
     `;
     const toggleRoot = async () => {
       if (window.__IDE_TEST_MODE__) console.info('[FileExplorer] root-toggle', this.currentRootDir);
@@ -149,8 +149,8 @@ class FileExplorer {
       itemEl.innerHTML = `
         ${entry.isDirectory
           ? `<span class="tree-chevron ${isExpanded ? 'is-expanded' : ''}" aria-hidden="true"></span><span class="file-icon folder-icon ${isExpanded ? 'is-open' : ''}" aria-hidden="true"></span>`
-          : `<span class="file-icon file-icon-${icon.color}" aria-hidden="true">${icon.label}</span>`}
-        <span class="tree-label" title="${entry.path}">${entry.name}</span>
+          : `<span class="file-icon file-icon-${icon.color}" aria-hidden="true">${this.escapeHtml(icon.label)}</span>`}
+        <span class="tree-label" title="${this.escapeHtml(entry.path)}">${this.escapeHtml(entry.name)}</span>
       `;
 
       parentElement.appendChild(itemEl);
@@ -204,6 +204,15 @@ class FileExplorer {
     if (normalizedName === 'dockerfile') return { label: 'D', color: 'blue' };
     const ext = normalizedName.includes('.') ? normalizedName.split('.').pop() : '';
     return FILE_ICON_MAP[ext] || { label: '\u2022', color: 'muted' };
+  }
+
+  escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 }
 

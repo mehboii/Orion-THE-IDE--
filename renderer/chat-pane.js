@@ -1,7 +1,7 @@
 class CustomModelPane {
   constructor({ id, label, model, cwd, onFocus, onClose, onRestart, onKill, onCwdChange, onLabelChange, onStatusChange }) {
     Object.assign(this, { id, label: label || model.name, model, cwd: cwd || '', onFocus, onClose, onRestart, onKill, onCwdChange, onLabelChange, onStatusChange });
-    this.status = 'idle'; this.messages = []; this._activeMessage = null; this.fullAutoApprove = false; this.toolCards = new Map();
+    this.status = 'idle'; this.messages = []; this._activeMessage = null; this.activeRequestId = null; this.fullAutoApprove = false; this.toolCards = new Map();
     this._loadingEl = null; this._loadingTimers = [];
     this._createDOM();
   }
@@ -51,9 +51,16 @@ class CustomModelPane {
     text = String(text || '').trim(); if (!text || this.status === 'disconnected') return;
     this.addMessage('user', text); this.input.value = ''; this.input.disabled = true; this._activeMessage = this.addMessage('assistant', ''); this.setStatus('busy');
     this._showLoading();
-    await window.electronAPI.sendCustomModelChat({ paneId: this.id, model: this.model, cwd: this.cwd, fullAutoApprove: this.fullAutoApprove, maxIterations: this.model.maxIterations || 25, messages: this.messages.filter((m) => m.role === 'user' || m.role === 'assistant').map(({ role, content }) => ({ role, content })) });
+    const result = await window.electronAPI.sendCustomModelChat({ paneId: this.id, model: this.model, cwd: this.cwd, fullAutoApprove: this.fullAutoApprove, maxIterations: this.model.maxIterations || 25, messages: this.messages.filter((m) => m.role === 'user' || m.role === 'assistant').map(({ role, content }) => ({ role, content })) });
+    if (!this.activeRequestId && this.status === 'busy') this.activeRequestId = result?.requestId || null;
   }
-  receiveToken(token) {
+  acceptsRequest(requestId) {
+    if (!requestId) return false;
+    if (!this.activeRequestId && this.status === 'busy') this.activeRequestId = requestId;
+    return this.activeRequestId === requestId;
+  }
+  receiveToken({ requestId, token }) {
+    if (!this.acceptsRequest(requestId)) return;
     this._clearLoading();
     if (!this._activeMessage) {
       this._activeMessage = this.addMessage('assistant', '');
@@ -62,8 +69,9 @@ class CustomModelPane {
     this._activeMessage.el.textContent = this._activeMessage.content;
     this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
-  receiveDone() { this._clearLoading(); this._activeMessage = null; this.input.disabled = false; this.setStatus('running'); this.input.focus(); }
-  disconnect(error) {
+  receiveDone({ requestId }) { if (!this.acceptsRequest(requestId)) return; this._clearLoading(); this._activeMessage = null; this.activeRequestId = null; this.input.disabled = false; this.setStatus('running'); this.input.focus(); }
+  disconnect(error, requestId = null) {
+    if (requestId && !this.acceptsRequest(requestId)) return;
     this._clearLoading();
     if (this._activeMessage && !this._activeMessage.content) {
       this._activeMessage.el.remove();
@@ -71,6 +79,7 @@ class CustomModelPane {
       if (idx >= 0) this.messages.splice(idx, 1);
     }
     this._activeMessage = null;
+    this.activeRequestId = null;
     this.input.disabled = true;
     this.disconnectedEl.classList.remove('hidden');
     this.disconnectedEl.classList.remove('disconnected-unreachable', 'disconnected-model-not-found');
@@ -97,6 +106,7 @@ class CustomModelPane {
     this.setStatus('disconnected');
   }
   showToolCall(call) {
+    if (!this.acceptsRequest(call.requestId)) return;
     this._clearLoading();
     if (this._activeMessage) {
       const c = (this._activeMessage.content || '').trim();
@@ -111,7 +121,8 @@ class CustomModelPane {
     if (call.needsApproval) { const actions = document.createElement('div'); actions.className = 'tool-approval'; actions.innerHTML = '<span>Approval required</span><button class="btn btn-primary" type="button">Approve</button><button class="btn btn-danger" type="button">Deny</button>'; actions.querySelector('.btn-primary').addEventListener('click', () => { window.electronAPI.decideCustomModelTool(call.callId, true); actions.remove(); }); actions.querySelector('.btn-danger').addEventListener('click', () => { window.electronAPI.decideCustomModelTool(call.callId, false); actions.remove(); }); card.appendChild(actions); }
     this.messagesEl.appendChild(card); this.toolCards.set(call.callId, card); this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
-  showToolResult({ callId, result }) {
+  showToolResult({ requestId, callId, result }) {
+    if (!this.acceptsRequest(requestId)) return;
     const card = this.toolCards.get(callId);
     if (!card) return;
     const isSuccess = Boolean(result.ok || result.success);
@@ -122,11 +133,12 @@ class CustomModelPane {
     card.open = false;
     this._showLoading();
   }
-  showMaxIterations(maxIterations) { this.addMessage('assistant', `Max tool-call iterations reached (${maxIterations}). Stopped to prevent an infinite loop.`); }
+  showMaxIterations(maxIterations, requestId) { if (this.acceptsRequest(requestId)) this.addMessage('assistant', `Max tool-call iterations reached (${maxIterations}). Stopped to prevent an infinite loop.`); }
   addMessage(role, content) { const el = document.createElement('div'); el.className = `chat-message ${role}`; el.textContent = content; this.messagesEl.appendChild(el); const item = { role, content, el }; this.messages.push(item); this.messagesEl.scrollTop = this.messagesEl.scrollHeight; return item; }
   setStatus(status) { this.status = status; this.statusDot.className = `status-dot status-${status}`; this.statusDot.title = `Model status: ${status}`; this.onStatusChange?.(this.id, status); }
   setFocused(focused) { this.container.classList.toggle('focused', focused); if (focused && !this.input.disabled) this.input.focus(); }
-  fit() {} getDimensions() { return { cols: 80, rows: 24 }; } clearTerminal() { this._clearLoading(); this.messagesEl.innerHTML = ''; this.messages = []; this.toolCards.clear(); } write() {} setCwd(cwd) { this.cwd = cwd || ''; this.cwdButton.textContent = this.cwd || 'Project root'; } destroy() { this._clearLoading(); this.container.remove(); }
+  cancelActiveRequest() { if (this.activeRequestId || this.status === 'busy') window.electronAPI.cancelCustomModelChat?.(this.id); this.activeRequestId = null; }
+  fit() {} getDimensions() { return { cols: 80, rows: 24 }; } clearTerminal() { this.cancelActiveRequest(); this._clearLoading(); this.messagesEl.innerHTML = ''; this.messages = []; this.toolCards.clear(); } write() {} setCwd(cwd) { this.cwd = cwd || ''; this.cwdButton.textContent = this.cwd || 'Project root'; } destroy() { this.cancelActiveRequest(); this._clearLoading(); this.container.remove(); }
   escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 }
 window.CustomModelPane = CustomModelPane;
