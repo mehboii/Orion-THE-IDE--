@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Authoritative current project root (owned by the main process)
   getProjectRoot: () => ipcRenderer.invoke('project-root:get'),
   setProjectRoot: (root) => ipcRenderer.invoke('project-root:set', root),
+  searchWorkspace: (query) => ipcRenderer.invoke('workspace:search', query),
+  getGitStatus: () => ipcRenderer.invoke('git:status'),
+  gitAction: (action, filePath, message) => ipcRenderer.invoke('git:operation', { action, payload: { paths: filePath ? [filePath] : [], message } }),
+  searchMarketplace: (query, offset = 0, size = 30) => ipcRenderer.invoke('marketplace:search', { query, offset, size }),
+  getMarketplaceDetails: (identifier) => ipcRenderer.invoke('marketplace:details', identifier),
 
   // PTY Methods
   createPty: (params) => ipcRenderer.invoke('pty:create', params),
@@ -85,6 +90,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('file-changed', handler);
   },
   openEditorFile: (filePath) => ipcRenderer.invoke('editor:open-file', filePath),
+  gitStatus: (cwd) => ipcRenderer.invoke('git:status', cwd),
+  gitDiff: (request) => ipcRenderer.invoke('git:diff', request),
+  gitOperation: (request) => ipcRenderer.invoke('git:operation', request),
+  watchGit: (cwd) => ipcRenderer.invoke('git:watch', cwd),
+  unwatchGit: () => ipcRenderer.invoke('git:unwatch'),
+  onGitStatusChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('git:status-changed', handler);
+    return () => ipcRenderer.removeListener('git:status-changed', handler);
+  },
   controlWindow: (action) => ipcRenderer.invoke('window:control', action)
 });
 

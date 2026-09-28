@@ -81,7 +81,7 @@ function openEditorFile(filePath) {
     height: 800,
     minWidth: 700,
     minHeight: 500,
-    title: 'Agent Terminal IDE \u2014 Editor',
+    title: 'ORION IDE \u2014 Editor',
     icon: path.join(__dirname, '../build/icon.png'),
     ...getGlassWindowOptions(),
     webPreferences: {
@@ -161,7 +161,7 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    title: 'Agent Terminal IDE',
+    title: 'ORION IDE',
     icon: path.join(__dirname, '../build/icon.png'),
     ...getGlassWindowOptions(),
     webPreferences: {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;">
-  <title>Agent Terminal IDE &mdash; Editor</title>
+  <title>ORION IDE &mdash; Editor</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="editor.css">
 </head>
@@ -12,7 +12,17 @@
   <main class="editor-window">
     <header class="editor-window-header">
       <div class="editor-header-left">
-        <strong>EDITOR</strong><span id="editor-root-label">No folder selected</span>
+        <div class="editor-menubar" role="menubar">
+          <button class="editor-menu-button" data-editor-menu="file" type="button">File</button>
+          <button class="editor-menu-button" data-editor-menu="edit" type="button">Edit</button>
+          <button class="editor-menu-button" data-editor-menu="selection" type="button">Selection</button>
+          <button class="editor-menu-button" data-editor-menu="view" type="button">View</button>
+          <button class="editor-menu-button" data-editor-menu="go" type="button">Go</button>
+          <button class="editor-menu-button" data-editor-menu="run" type="button">Run</button>
+          <button class="editor-menu-button" data-editor-menu="terminal" type="button">Terminal</button>
+          <button class="editor-menu-button" data-editor-menu="help" type="button">Help</button>
+        </div>
+        <button id="editor-command-center" class="editor-command-center" type="button" title="Command Center (Ctrl+Shift+P)"><span>⌄</span><span id="editor-root-label">No folder selected</span></button>
       </div>
       <div class="editor-header-controls">
         <button id="btn-editor-save" class="editor-btn" type="button" title="Save file (Ctrl+S / Cmd+S)">Save</button>
@@ -28,6 +38,10 @@
         <button id="btn-editor-stop" class="editor-btn stop-btn hidden" type="button" title="Stop execution">Stop</button>
       </div>
     </header>
+    <div id="editor-menu-dropdown" class="editor-menu-dropdown hidden" role="menu"></div>
+    <div id="editor-command-palette" class="editor-command-palette hidden" role="dialog" aria-modal="true">
+      <div class="editor-command-palette-box"><input id="editor-command-input" placeholder="Search commands…" autocomplete="off"><div id="editor-command-list" role="listbox"></div></div>
+    </div>
     <div class="code-editor-header"><div class="code-editor-tabs-scroll" id="code-editor-tabs"></div></div>
     <div class="monaco-editor-container" id="monaco-editor-container"></div>
     <div id="run-output-panel" class="run-output-panel hidden">

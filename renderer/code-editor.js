@@ -5,6 +5,8 @@ class CodeEditorManager {
     this.editor = null;
     this.monacoReady = false;
     this.openTabs = new Map(); // filePath -> { filePath, content, mode: 'view'|'edit', model }
+    this.gitStatuses = new Map();
+    this.gitRoot = null;
     this.fileBreakpoints = new Map(); // filePath -> Set<lineNumber>
     this.breakpointDecorations = new Map(); // filePath -> decorationIds[]
     this.activeLineDecorationId = [];
@@ -22,6 +24,19 @@ class CodeEditorManager {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  setGitStatus(root, files) {
+    this.gitRoot = root || null;
+    this.gitStatuses = new Map((files || []).map((file) => [String(file.path).replace(/\\/g, '/'), file]));
+    this.renderTabs();
+  }
+
+  getGitStatus(filePath) {
+    if (!this.gitRoot) return null;
+    const root = String(this.gitRoot).replace(/\\/g, '/').replace(/\/$/, '');
+    const absolute = String(filePath).replace(/\\/g, '/');
+    return this.gitStatuses.get(absolute.startsWith(`${root}/`) ? absolute.slice(root.length + 1) : absolute) || null;
   }
 
   notifyDirtyState() {
@@ -384,9 +399,11 @@ class CodeEditorManager {
     }
 
     for (const [filePath, tabData] of this.openTabs.entries()) {
+      const git = this.getGitStatus(filePath);
       const isActive = filePath === this.activeFilePath;
       const tabEl = document.createElement('div');
-      tabEl.className = `editor-tab ${isActive ? 'active' : ''}`;
+      tabEl.className = `editor-tab ${isActive ? 'active' : ''}${git ? ` git-${git.kind}` : ''}`;
+      if (git) tabEl.dataset.gitStatus = git.badge;
       tabEl.setAttribute('data-filepath', filePath);
 
       tabEl.innerHTML = `

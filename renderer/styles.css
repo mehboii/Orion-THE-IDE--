@@ -3,6 +3,12 @@
    Source: vscode theme-defaults dark_plus / vs-dark
    ============================================================================= */
 :root {
+  --git-modified: #FF9D55;
+  --git-added: #81C995;
+  --git-untracked: #81C995;
+  --git-deleted: #F07178;
+  --git-renamed: #82AAFF;
+  --git-conflict: #f5b642;
   /* Editor */
   --vscode-editor-background: #1e1e1e;
   --vscode-editor-foreground: #d4d4d4;
@@ -301,6 +307,41 @@ kbd {
   width: 2px;
   background: var(--vscode-activityBar-activeBorder);
 }
+
+/* Functional activity views. These are intentionally compact so the terminal
+   workbench remains the primary surface on smaller desktop windows. */
+.sidebar-panel { display: none; min-height: 100%; }
+.sidebar-panel.active { display: block; }
+.panel-pad { padding: 12px; color: var(--vscode-sideBar-foreground); }
+.panel-pad h2 { margin: 2px 0 8px; font-size: 14px; letter-spacing: .02em; }
+.panel-muted { color: #a6afbd; font-size: 12px; line-height: 1.5; padding: 8px 0; }
+.sidebar-input-wrap { display: grid; gap: 7px; color: #cbd2df; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.search-results, .extension-results, .scm-files, .run-list { display: grid; gap: 5px; margin-top: 10px; }
+.search-result, .extension-card { width: 100%; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; text-align: left; padding: 8px; cursor: pointer; }
+.search-result:hover, .extension-card:hover { background: rgba(255,255,255,.055); border-color: rgba(255,138,85,.24); }
+.search-result { display: grid; gap: 3px; }
+.search-result strong { font-size: 12px; color: #f4f1ea; }
+.search-result span { font: 11px/1.4 var(--font-mono, monospace); color: #aeb6c4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; padding-bottom: 8px; }
+.icon-text-btn { border: 0; background: transparent; color: #ff8a55; cursor: pointer; font-size: 12px; padding: 4px; }
+.icon-text-btn:hover { color: #f4f1ea; }
+.scm-message { width: 100%; min-height: 58px; resize: vertical; margin: 7px 0; box-sizing: border-box; }
+.scm-commit { width: 100%; margin-bottom: 9px; }
+.scm-file, .run-item { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; padding: 6px 3px; font-size: 12px; min-width: 0; }
+.scm-file > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-status { color: #ff8a55; font-family: monospace; min-width: 18px; }
+.run-item { grid-template-columns: 1fr auto; border-bottom: 1px solid rgba(255,255,255,.06); }
+.run-item span { grid-column: 1 / -1; color: #a6afbd; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extension-search { display: flex; gap: 5px; }
+.extension-search input { min-width: 0; flex: 1; }
+.extension-card { display: grid; grid-template-columns: 30px 1fr; gap: 8px; }
+.extension-card strong, .extension-card small, .extension-card em { display: block; }
+.extension-card strong { font-size: 12px; color: #f4f1ea; }
+.extension-card small { margin-top: 2px; color: #a6afbd; font-size: 10px; }
+.extension-card em { margin-top: 4px; color: #c3c8d1; font-size: 11px; font-style: normal; line-height: 1.35; }
+.extension-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; background: #273553; color: #ff8a55; font-weight: 700; }
+.marketplace-notice, .compatibility-warning { margin: 12px 0 0; padding: 8px; border-left: 2px solid #ff713d; background: rgba(255,113,61,.08); color: #d8c0b6; font-size: 11px; line-height: 1.45; }
+.extension-detail p { font-size: 12px; line-height: 1.5; }
 .activity-item svg { display: block; }
 .activity-spacer { flex: 1; }
 
@@ -2802,6 +2843,35 @@ html, body {
   transform: translateX(2px);
 }
 
+/* Orion command strip: compact, opaque desktop chrome. */
+.titlebar {
+  background: #07090D !important;
+  border-bottom: 1px solid #202631 !important;
+  box-shadow: none !important;
+}
+.menubar-item { color: #c8c7c2; }
+.menubar-item.open, .menubar-item:hover, .menubar-item:focus { background: #1a202b !important; color: #F4F1EA !important; }
+.titlebar-command-center {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 210px;
+  max-width: 42vw;
+  padding: 0 14px !important;
+  border: 1px solid #282e39;
+  border-radius: 5px;
+  background: #111827 !important;
+  color: #F4F1EA !important;
+  cursor: pointer;
+}
+.titlebar-command-center:hover, .titlebar-command-center:focus { border-color: #4C6FFF; outline: none; }
+.command-center-chevron { color: #FF8A55; font-size: 14px; }
+.titlebar-action:disabled { cursor: default; opacity: .35; }
+.menubar-dropdown { background: #111827 !important; border: 1px solid #303949 !important; box-shadow: 0 10px 24px rgba(0,0,0,.42) !important; }
+.menubar-dropdown-item:disabled { color: #6f7580 !important; cursor: default; }
+.menubar-dropdown-item.checked { color: #F4F1EA; }
+
 .command-palette {
   background: rgba(4, 6, 14, 0.55);
   backdrop-filter: blur(12px) saturate(180%);
@@ -2916,6 +2986,25 @@ html, body {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+.tree-item.git-modified .tree-label, .editor-tab.git-modified .editor-tab-title, .git-status-badge.git-modified { color: var(--git-modified); }
+.tree-item.git-added .tree-label, .editor-tab.git-added .editor-tab-title, .git-status-badge.git-added { color: var(--git-added); }
+.tree-item.git-untracked .tree-label, .editor-tab.git-untracked .editor-tab-title, .git-status-badge.git-untracked { color: var(--git-untracked); }
+.tree-item.git-deleted .tree-label, .editor-tab.git-deleted .editor-tab-title, .git-status-badge.git-deleted { color: var(--git-deleted); text-decoration: line-through; }
+.tree-item.git-renamed .tree-label, .editor-tab.git-renamed .editor-tab-title, .git-status-badge.git-renamed { color: var(--git-renamed); }
+.tree-item.git-conflict .tree-label, .editor-tab.git-conflict .editor-tab-title, .git-status-badge.git-conflict { color: var(--git-conflict); }
+.git-status-badge { margin-left: auto; padding-left: 8px; font-weight: 700; font-size: 11px; }
+.editor-tab[data-git-status] .editor-tab-title::after { content: attr(data-git-status); }
+.editor-tab[data-git-status]::after { content: attr(data-git-status); margin-left: 6px; font-size: 11px; font-weight: 700; }
+.editor-tab.git-modified::after { color: var(--git-modified); } .editor-tab.git-added::after, .editor-tab.git-untracked::after { color: var(--git-added); } .editor-tab.git-deleted::after { color: var(--git-deleted); } .editor-tab.git-renamed::after { color: var(--git-renamed); } .editor-tab.git-conflict::after { color: var(--git-conflict); }
+.scm-toolbar { display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0; }
+.scm-toolbar button { font: inherit; font-size: 11px; cursor: pointer; }
+.scm-section-title { margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: var(--vscode-sideBarTitle-foreground, #ccc); }
+.scm-section-title span { opacity: .65; }
+.scm-file { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 0; }
+.scm-open { border: 0; background: transparent; color: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.scm-path { color: #999; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.git-diff-output { white-space: pre-wrap; max-height: 280px; overflow: auto; font-size: 11px; background: #11131b; padding: 8px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

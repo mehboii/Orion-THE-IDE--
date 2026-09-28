@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self';">
-  <title>Agent Terminal IDE</title>
+  <title>ORION IDE</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -15,12 +15,23 @@
     <header class="titlebar" id="titlebar">
       <div class="menubar" role="menubar">
         <button class="menubar-item" data-menu="file" type="button">File</button>
-        <button class="menubar-item" data-menu="terminal" type="button">Terminal</button>
+        <button class="menubar-item" data-menu="edit" type="button">Edit</button>
+        <button class="menubar-item" data-menu="selection" type="button">Selection</button>
         <button class="menubar-item" data-menu="view" type="button">View</button>
+        <button class="menubar-item" data-menu="go" type="button">Go</button>
+        <button class="menubar-item" data-menu="run" type="button">Run</button>
+        <button class="menubar-item" data-menu="terminal" type="button">Terminal</button>
         <button class="menubar-item" data-menu="help" type="button">Help</button>
       </div>
-      <div class="titlebar-center" id="titlebar-title">Agent Terminal IDE</div>
+      <div class="titlebar-center titlebar-command-center" id="titlebar-title" role="button" tabindex="0" title="Command Center (Ctrl+Shift+P)">
+        <span class="command-center-chevron" aria-hidden="true">⌄</span><span id="command-center-workspace">Orion</span>
+      </div>
       <div class="titlebar-right">
+        <button id="btn-nav-back" class="titlebar-action" type="button" title="Back" aria-label="Back" disabled>←</button>
+        <button id="btn-nav-forward" class="titlebar-action" type="button" title="Forward" aria-label="Forward" disabled>→</button>
+        <button id="btn-layout-sidebar" class="titlebar-action" type="button" title="Toggle Primary Sidebar (Ctrl+B)" aria-label="Toggle Primary Sidebar">▮</button>
+        <button id="btn-layout-panel" class="titlebar-action" type="button" title="Toggle Bottom Panel" aria-label="Toggle Bottom Panel">▱</button>
+        <button id="btn-layout-grid" class="titlebar-action" type="button" title="Change Terminal Layout" aria-label="Change Terminal Layout">⊞</button>
         <button id="btn-command-palette" class="titlebar-action" type="button" title="Command Palette (Ctrl+Shift+P)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         </button>
@@ -33,6 +44,10 @@
         <button class="activity-item active" data-activity="explorer" type="button" title="Explorer (Ctrl+Shift+E)" aria-label="Explorer">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
         </button>
+        <button class="activity-item" data-activity="search" type="button" title="Search workspace" aria-label="Search workspace"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.8" cy="10.8" r="6.4"/><path d="m16 16 4.5 4.5"/></svg></button>
+        <button class="activity-item" data-activity="source-control" type="button" title="Source Control" aria-label="Source Control"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v7a5 5 0 0 0 5 5h5M6 7a5 5 0 0 1 5 5v1a5 5 0 0 0 5 5h0"/></svg></button>
+        <button class="activity-item" data-activity="run-debug" type="button" title="Run and Debug" aria-label="Run and Debug"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 5 10 7-10 7z"/><path d="M5 4v16"/></svg></button>
+        <button class="activity-item" data-activity="extensions" type="button" title="Extensions Marketplace" aria-label="Extensions Marketplace"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h6v6h-6zM12 4v16M4 12h16"/></svg></button>
         <span class="activity-spacer"></span>
         <button class="activity-item" data-activity="settings" type="button" title="Settings & Shortcuts" aria-label="Settings">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -54,6 +69,7 @@
         </div>
 
         <div class="side-bar-body" id="side-bar-body">
+          <section class="sidebar-panel active" data-panel="explorer">
           <!-- Files section (collapsible file tree) -->
           <div class="sidebar-section" data-section="files">
             <button class="sidebar-section-header" type="button" data-toggle-section="files">
@@ -100,6 +116,12 @@
             <div class="sidebar-section-content" id="sidebar-custom-models-list"></div>
             <button id="btn-add-custom-model" class="tree-item" type="button">+ Add custom endpoint</button>
           </div>
+          </section>
+          <section class="sidebar-panel" data-panel="search" aria-label="Search"></section>
+          <section class="sidebar-panel" data-panel="source-control" aria-label="Source Control"></section>
+          <section class="sidebar-panel" data-panel="run-debug" aria-label="Run and Debug"></section>
+          <section class="sidebar-panel" data-panel="extensions" aria-label="Extensions Marketplace"></section>
+          <section class="sidebar-panel" data-panel="settings"><div class="panel-pad"><h2>Settings</h2><p>Sidebar preferences are saved with the current workspace. Marketplace access uses the public Open VSX discovery API.</p></div></section>
         </div>
       </aside>
       <div class="sidebar-sash" id="sidebar-sash" title="Drag to resize"></div>
@@ -281,6 +303,7 @@
   <script src="grid.js"></script>
   <script src="broadcast.js"></script>
   <script src="file-explorer.js"></script>
+  <script src="sidebar-panels.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
