@@ -12,8 +12,12 @@ class AppController {
     this.customModelTerminalCreates = new Map(); // prevents duplicate model-terminal launches
     this.sidebarCollapsed = false;
     this.sidebarWidth = 260;
+    this.activeActivity = 'explorer';
     this.commandPaletteIndex = 0;
     this.commandPaletteFiltered = [];
+    this.navigationHistory = [];
+    this.navigationIndex = -1;
+    this.bottomPanelVisible = false;
 
     // DOM refs
     this.gridContainer = document.getElementById('grid-container');
@@ -51,6 +55,9 @@ class AppController {
     this._editingCustomModelId = null;
     this.editorTabsScroll = document.getElementById('editor-tabs-scroll');
     this.titlebarTitle = document.getElementById('titlebar-title');
+    this.commandCenterWorkspace = document.getElementById('command-center-workspace');
+    this.btnNavBack = document.getElementById('btn-nav-back');
+    this.btnNavForward = document.getElementById('btn-nav-forward');
     this.appShell = document.getElementById('app-shell');
 
     this.modalOrphans = document.getElementById('modal-orphans');
@@ -77,6 +84,8 @@ class AppController {
     this.menubarDropdown = document.getElementById('menubar-dropdown');
 
     this.fileExplorer = null;
+    this.sidebarPanels = null;
+    this.gitStatus = null;
   }
 
   async init() {
@@ -97,7 +106,15 @@ class AppController {
     this.setupKeyboardShortcuts();
     this.setupSidebarResize();
     this.setupCommandPalette();
-    this.setupMenubar();
+    this.setupOrionMenubar();
+    this.sidebarPanels = new SidebarPanels(this);
+    const savedWidth = Number(localStorage.getItem('orion.sidebar.width'));
+    if (savedWidth >= 160 && savedWidth <= 480) {
+      this.sidebarWidth = savedWidth;
+      this.sideBar.style.width = `${savedWidth}px`;
+      this.sideBar.style.flexBasis = `${savedWidth}px`;
+    }
+    if (localStorage.getItem('orion.sidebar.hidden') === 'true') this.toggleSidebar(true);
 
     // The terminal window owns only the file tree. Monaco belongs exclusively
     // to the separate editor BrowserWindow opened through main-process IPC.
@@ -114,12 +131,21 @@ class AppController {
       // Folder and using an earlier pane-local/default cwd.
       const canonicalRoot = await window.electronAPI.setProjectRoot(dirPath);
       console.info('[OPENED FOLDER] Renderer confirmed project root:', canonicalRoot);
+      await window.electronAPI.watchGit?.(canonicalRoot);
+      this.applyGitStatus(await window.electronAPI.gitStatus?.(canonicalRoot));
       return canonicalRoot;
     });
 
     // Restore the explorer as a view of the authoritative main-process root.
     const projectRoot = await window.electronAPI.getProjectRoot();
     if (projectRoot) await this.fileExplorer.setRootDirectory(projectRoot);
+    if (window.electronAPI.onGitStatusChanged) {
+      window.electronAPI.onGitStatusChanged((status) => this.applyGitStatus(status));
+      if (projectRoot) {
+        await window.electronAPI.watchGit(projectRoot);
+        this.applyGitStatus(await window.electronAPI.gitStatus(projectRoot));
+      }
+    }
 
     const orphans = await window.electronAPI.listOrphans();
     if (orphans && orphans.length > 0 && !window.__IDE_TEST_MODE__) {
@@ -457,9 +483,10 @@ class AppController {
     await this.restartPane(paneId, { killTmux: true, trigger: 'agent-preset-change' });
   }
 
-  focusPane(paneId) {
+  focusPane(paneId, record = true) {
     if (!this.panes.has(paneId)) return;
     this.focusedPaneId = paneId;
+    if (record) this.recordNavigation({ type: 'pane', paneId });
     for (const [id, pane] of this.panes.entries()) {
       pane.setFocused(id === paneId);
     }
@@ -1072,6 +1099,7 @@ class AppController {
     this.sidebarCollapsed = force != null ? force : !this.sidebarCollapsed;
     if (this.sideBar) this.sideBar.classList.toggle('collapsed', this.sidebarCollapsed);
     if (this.appShell) this.appShell.classList.toggle('sidebar-collapsed', this.sidebarCollapsed);
+    localStorage.setItem('orion.sidebar.hidden', String(this.sidebarCollapsed));
     // Reflow terminals after layout change \u2014 use transitionend for animated sidebar
     const onDone = () => {
       this.gridManager && this.gridManager.reflowAll();
@@ -1101,6 +1129,7 @@ class AppController {
         this.gridManager && this.gridManager.reflowAll();
       };
       const onUp = () => {
+        localStorage.setItem('orion.sidebar.width', String(this.sidebarWidth));
         sash.classList.remove('dragging');
         try { sash.releasePointerCapture(e.pointerId); } catch (_) {}
         window.removeEventListener('pointermove', onMove);
@@ -1180,7 +1209,7 @@ class AppController {
 
   filterCommandPalette() {
     const q = (this.commandPaletteInput.value || '').trim().toLowerCase();
-    const all = this.getCommands();
+    const all = this.getOrionCommands();
     this.commandPaletteFiltered = q
       ? all.filter((c) => c.label.toLowerCase().includes(q) || c.id.includes(q))
       : all;
@@ -1295,6 +1324,109 @@ class AppController {
     document.querySelectorAll('.menubar-item').forEach((el) => el.classList.remove('open'));
   }
 
+  /* Central command registry shared by the command center, menus, and title controls. */
+  getOrionCommands() {
+    const enabled = (value) => (typeof value === 'function' ? value() : value !== false);
+    return [
+      { id: 'file.openFolder', label: 'File: Open Folder…', accel: 'Ctrl+O', run: () => this.fileExplorer?.handleOpenFolderClick() },
+      { id: 'workspace.save', label: 'Workspace: Save Current Layout…', run: () => this.saveCurrentWorkspace() },
+      { id: 'workspace.open', label: 'Workspace: Switch Workspace', run: () => this.workspaceSelect?.focus() },
+      { id: 'edit.editorOnly', label: 'Edit: Editing commands are available in an active Monaco editor', enabled: false, run: () => {} },
+      { id: 'selection.editorOnly', label: 'Selection: Multi-cursor commands are available in an active Monaco editor', enabled: false, run: () => {} },
+      { id: 'view.commandCenter', label: 'View: Show Command Center', accel: 'Ctrl+Shift+P', run: () => this.openCommandPalette() },
+      { id: 'view.sidebar', label: 'View: Toggle Primary Side Bar', accel: 'Ctrl+B', checked: () => !this.sidebarCollapsed, run: () => this.toggleSidebar() },
+      { id: 'view.panel', label: 'View: Toggle Bottom Panel', checked: () => this.bottomPanelVisible, run: () => this.toggleBottomPanel() },
+      { id: 'view.fullScreen', label: 'View: Toggle Full Screen', accel: 'F11', run: () => window.electronAPI.controlWindow('toggle-fullscreen') },
+      { id: 'view.grid23', label: 'View: 2×3 Terminal Layout', checked: () => this.gridManager?.preset === '2x3', run: () => this.setGridPreset('2x3') },
+      { id: 'view.grid32', label: 'View: 3×2 Terminal Layout', checked: () => this.gridManager?.preset === '3x2', run: () => this.setGridPreset('3x2') },
+      { id: 'go.back', label: 'Go: Back', enabled: () => this.navigationIndex > 0, run: () => this.navigateHistory(-1) },
+      { id: 'go.forward', label: 'Go: Forward', enabled: () => this.navigationIndex >= 0 && this.navigationIndex < this.navigationHistory.length - 1, run: () => this.navigateHistory(1) },
+      { id: 'go.nextTerminal', label: 'Go: Next Terminal', enabled: () => this.panes.size > 1, run: () => this.focusPaneByIndex((Array.from(this.panes.keys()).indexOf(this.focusedPaneId) + 1) % this.panes.size) },
+      { id: 'run.start', label: 'Run: Start Agent in Focused Terminal', enabled: () => !!this.focusedPaneId, run: () => this.openRunAgentModal({ targetPaneId: this.focusedPaneId }) },
+      { id: 'run.stop', label: 'Run: Stop Focused Terminal', enabled: () => !!this.focusedPaneId, run: () => this.focusedPaneId && this.removePane(this.focusedPaneId) },
+      { id: 'terminal.new', label: 'Terminal: New Terminal', accel: 'Ctrl+Shift+N', run: () => this.createPane({}) },
+      { id: 'terminal.close', label: 'Terminal: Kill Focused Terminal', accel: 'Ctrl+Shift+W', enabled: () => !!this.focusedPaneId, run: () => this.focusedPaneId && this.removePane(this.focusedPaneId) },
+      { id: 'terminal.broadcast', label: 'Terminal: Toggle Broadcast Mode', accel: 'Ctrl+Shift+B', run: () => window.broadcastManager.toggle() },
+      { id: 'terminal.killAll', label: 'Terminal: Kill All Terminals', accel: 'Ctrl+Shift+K', enabled: () => this.panes.size > 0, run: () => this.killAllSessions() },
+      { id: 'help.shortcuts', label: 'Help: Keyboard Shortcuts', run: () => this.modalHelp.classList.remove('hidden') },
+      { id: 'help.tmux', label: 'Help: Recheck tmux Connection', run: () => this.checkTmux() }
+    ].map((command) => ({ ...command, enabled: enabled(command.enabled) }));
+  }
+
+  applyGitStatus(status) {
+    this.gitStatus = status;
+    this.fileExplorer?.setGitStatus(status);
+    const badge = document.querySelector('.activity-item[data-activity="source-control"] .section-badge');
+    if (badge) badge.textContent = String(status?.files?.length || 0);
+    if (this.activeActivity === 'source-control') this.sidebarPanels?.renderSourceControlV2(status);
+  }
+
+  setupOrionMenubar() {
+    const groups = {
+      file: ['file.openFolder', 'workspace.save', 'workspace.open'], edit: ['edit.editorOnly'], selection: ['selection.editorOnly'],
+      view: ['view.commandCenter', 'view.sidebar', 'view.panel', 'view.fullScreen', 'view.grid23', 'view.grid32'],
+      go: ['go.back', 'go.forward', 'go.nextTerminal'], run: ['run.start', 'run.stop'],
+      terminal: ['terminal.new', 'terminal.close', 'terminal.broadcast', 'terminal.killAll'],
+      help: ['help.shortcuts', 'help.tmux']
+    };
+    document.querySelectorAll('.menubar-item').forEach((button) => button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const commands = this.getOrionCommands();
+      const items = (groups[button.dataset.menu] || []).map((id) => commands.find((c) => c.id === id)).filter(Boolean);
+      this.openOrionMenu(button, items);
+    }));
+    document.addEventListener('click', () => this.closeMenubarDropdown());
+  }
+
+  openOrionMenu(anchor, items) {
+    const rect = anchor.getBoundingClientRect();
+    this.menubarDropdown.innerHTML = '';
+    items.forEach((item) => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'menubar-dropdown-item'; button.disabled = !item.enabled;
+      button.setAttribute('role', 'menuitem');
+      const state = item.checked?.() ? '✓ ' : '';
+      button.innerHTML = `<span>${state}${this.escapeHtml(item.label.replace(/^[^:]+:\\s*/, ''))}</span><span class="accel">${this.escapeHtml(item.accel || '')}</span>`;
+      button.addEventListener('click', (event) => { event.stopPropagation(); if (!button.disabled) { this.closeMenubarDropdown(); item.run?.(); } });
+      this.menubarDropdown.appendChild(button);
+    });
+    this.menubarDropdown.style.left = `${Math.min(rect.left, window.innerWidth - 290)}px`;
+    this.menubarDropdown.style.top = `${rect.bottom}px`;
+    this.menubarDropdown.classList.remove('hidden');
+    document.querySelectorAll('.menubar-item').forEach((el) => el.classList.toggle('open', el === anchor));
+    this.menubarDropdown.querySelector('.menubar-dropdown-item:not(:disabled)')?.focus();
+  }
+
+  recordNavigation(location) {
+    const current = this.navigationHistory[this.navigationIndex];
+    if (current?.type === location.type && current?.paneId === location.paneId) return;
+    this.navigationHistory.splice(this.navigationIndex + 1);
+    this.navigationHistory.push(location);
+    if (this.navigationHistory.length > 50) this.navigationHistory.shift();
+    this.navigationIndex = this.navigationHistory.length - 1;
+    this.updateNavigationControls();
+  }
+
+  navigateHistory(direction) {
+    const next = this.navigationIndex + direction;
+    if (next < 0 || next >= this.navigationHistory.length) return;
+    this.navigationIndex = next;
+    const location = this.navigationHistory[next];
+    if (location?.type === 'pane' && this.panes.has(location.paneId)) this.focusPane(location.paneId, false);
+    this.updateNavigationControls();
+  }
+
+  updateNavigationControls() {
+    if (this.btnNavBack) this.btnNavBack.disabled = this.navigationIndex <= 0;
+    if (this.btnNavForward) this.btnNavForward.disabled = this.navigationIndex < 0 || this.navigationIndex >= this.navigationHistory.length - 1;
+  }
+
+  toggleBottomPanel() {
+    this.bottomPanelVisible = !this.bottomPanelVisible;
+    this.statusBar?.classList.toggle('bottom-panel-expanded', this.bottomPanelVisible);
+    this.showBanner(this.bottomPanelVisible ? 'Bottom panel reserved for editor output is visible.' : 'Bottom panel hidden.');
+  }
+
   setGridPreset(preset) {
     this.gridManager.setPreset(preset);
     this.btnPreset2x3.classList.toggle('active', preset === '2x3');
@@ -1314,6 +1446,13 @@ class AppController {
     document.getElementById('titlebar')?.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) window.electronAPI.controlWindow('toggle-maximize');
     });
+    this.titlebarTitle?.addEventListener('click', () => this.openCommandPalette());
+    this.titlebarTitle?.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.openCommandPalette(); } });
+    this.btnNavBack?.addEventListener('click', () => this.navigateHistory(-1));
+    this.btnNavForward?.addEventListener('click', () => this.navigateHistory(1));
+    document.getElementById('btn-layout-sidebar')?.addEventListener('click', () => this.toggleSidebar());
+    document.getElementById('btn-layout-panel')?.addEventListener('click', () => this.toggleBottomPanel());
+    document.getElementById('btn-layout-grid')?.addEventListener('click', () => this.setGridPreset(this.gridManager?.preset === '2x3' ? '3x2' : '2x3'));
     this.btnAddPane.addEventListener('click', () => this.createPane({}));
     this.btnKillAll.addEventListener('click', () => this.killAllSessions());
     this.btnTabAdd.addEventListener('click', () => this.createPane({}));
@@ -1501,13 +1640,11 @@ class AppController {
 
   handleActivity(button) {
     const activity = button.dataset.activity;
-    if (activity === 'explorer') {
-      document.querySelectorAll('.activity-item').forEach((item) => item.classList.remove('active'));
-      button.classList.add('active');
-      if (this.sidebarCollapsed) this.toggleSidebar(false);
-    } else if (activity === 'settings') {
-      this.modalHelp.classList.remove('hidden');
-    }
+    if (activity === this.activeActivity && !this.sidebarCollapsed) { this.toggleSidebar(true); return; }
+    this.activeActivity = activity;
+    document.querySelectorAll('.activity-item').forEach((item) => item.classList.toggle('active', item === button));
+    if (this.sidebarCollapsed) this.toggleSidebar(false);
+    this.sidebarPanels?.activate(activity);
   }
 
   updateFooter() {
@@ -1529,8 +1666,11 @@ class AppController {
     }
     if (this.titlebarTitle) {
       const ws = this.activeWorkspaceName || 'Untitled';
-      this.titlebarTitle.textContent = `${ws} \u2014 Agent Terminal IDE`;
+      if (this.commandCenterWorkspace) this.commandCenterWorkspace.textContent = ws;
+      this.titlebarTitle.setAttribute('aria-label', `Command Center — ${ws}`);
     }
+
+    this.updateNavigationControls();
 
     // Keep broadcast status in sync
     if (window.broadcastManager) window.broadcastManager.updateUI();

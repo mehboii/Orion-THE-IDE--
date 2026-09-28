@@ -25,6 +25,8 @@ class FileExplorer {
     this.onRootChangeCallback = null;
     this.expandedDirs = new Set();
     this.selectedFilePath = null;
+    this.gitRoot = null;
+    this.gitStatuses = new Map();
     this.watchedRootDir = null;
     this.unsubscribeFileChanges = window.electronAPI.onFileChanged(({ filePath }) => {
       // The main process watches the open root. A rerender keeps the Explorer
@@ -42,6 +44,23 @@ class FileExplorer {
   }
 
   onRootChange(fn) { this.onRootChangeCallback = fn; }
+
+  setGitStatus(status) {
+    this.gitRoot = status?.root || null;
+    this.gitStatuses = new Map((status?.files || []).map((file) => [String(file.path).replace(/\\/g, '/'), file]));
+    this.render();
+  }
+
+  gitStatusFor(filePath, isDirectory = false) {
+    if (!this.gitRoot) return null;
+    const root = this.gitRoot.replace(/\\/g, '/').replace(/\/$/, '');
+    const relative = String(filePath).replace(/\\/g, '/').slice(root.length + 1);
+    if (!isDirectory) return this.gitStatuses.get(relative) || null;
+    const matches = [...this.gitStatuses.entries()].filter(([candidate]) => candidate.startsWith(`${relative}/`)).map(([, item]) => item);
+    if (!matches.length) return null;
+    const priority = { conflict: 6, deleted: 5, modified: 4, renamed: 3, added: 2, untracked: 1 };
+    return matches.sort((a, b) => (priority[b.kind] || 0) - (priority[a.kind] || 0))[0];
+  }
 
   async handleOpenFolderClick() {
     const selected = await window.electronAPI.selectDirectory(this.currentRootDir || undefined);
@@ -93,10 +112,11 @@ class FileExplorer {
     header.tabIndex = 0;
     header.setAttribute('aria-expanded', String(this.expandedDirs.has(this.currentRootDir)));
     const folderName = this.currentRootDir.split(/[/\\]/).pop() || this.currentRootDir;
+    const rootGit = this.gitStatusFor(this.currentRootDir, true);
     header.innerHTML = `
       <span class="tree-chevron ${this.expandedDirs.has(this.currentRootDir) ? 'is-expanded' : ''}" aria-hidden="true"></span>
       <span class="file-icon folder-icon ${this.expandedDirs.has(this.currentRootDir) ? 'is-open' : ''}" aria-hidden="true"></span>
-      <span class="file-tree-root-title" title="${this.escapeHtml(this.currentRootDir)}"><strong>${this.escapeHtml(folderName)}</strong></span>
+      <span class="file-tree-root-title ${rootGit ? `git-${rootGit.kind}` : ''}" title="${this.escapeHtml(this.currentRootDir)}"><strong>${this.escapeHtml(folderName)}</strong></span>${rootGit ? `<span class="git-status-badge git-${rootGit.kind}">${rootGit.badge}</span>` : ''}
     `;
     const toggleRoot = async () => {
       if (window.__IDE_TEST_MODE__) console.info('[FileExplorer] root-toggle', this.currentRootDir);
@@ -145,12 +165,14 @@ class FileExplorer {
       itemEl.style.paddingLeft = `${depth * 14 + 8}px`;
 
       const icon = entry.isDirectory ? null : this.getFileIcon(entry.name);
+      const git = this.gitStatusFor(entry.path, entry.isDirectory);
+      if (git) itemEl.classList.add(`git-${git.kind}`);
 
       itemEl.innerHTML = `
         ${entry.isDirectory
           ? `<span class="tree-chevron ${isExpanded ? 'is-expanded' : ''}" aria-hidden="true"></span><span class="file-icon folder-icon ${isExpanded ? 'is-open' : ''}" aria-hidden="true"></span>`
           : `<span class="file-icon file-icon-${icon.color}" aria-hidden="true">${this.escapeHtml(icon.label)}</span>`}
-        <span class="tree-label" title="${this.escapeHtml(entry.path)}">${this.escapeHtml(entry.name)}</span>
+        <span class="tree-label" title="${this.escapeHtml(entry.path)}">${this.escapeHtml(entry.name)}</span>${git ? `<span class="git-status-badge git-${git.kind}" title="${this.escapeHtml(git.kind)}${git.staged && git.unstaged ? ' (staged and unstaged)' : ''}">${this.escapeHtml(git.badge)}</span>` : ''}
       `;
 
       parentElement.appendChild(itemEl);

@@ -5,8 +5,31 @@ const workspaceStore = require('./workspace-store');
 const customModelStore = require('./custom-model-store');
 const customModelService = require('./custom-model-service');
 const projectRoot = require('./project-root');
+const gitService = require('./git-service');
+const developmentServices = require('./development-services');
 
 function registerIpcHandlers({ openEditorFile } = {}) {
+  const gitSubscriptions = new Map();
+  const stopGitWatch = (sender) => {
+    const stop = gitSubscriptions.get(sender.id);
+    if (stop) stop();
+    gitSubscriptions.delete(sender.id);
+  };
+  const refreshGitSubscriber = async (sender, cwd) => {
+    try { sender.send('git:status-changed', await gitService.status(cwd)); } catch (_) {}
+  };
+  ipcMain.handle('git:status', (_event, cwd) => gitService.status(cwd || projectRoot.get()));
+  ipcMain.handle('git:diff', (_event, { cwd, filePath, staged }) => gitService.diff(cwd || projectRoot.get(), filePath, staged));
+  ipcMain.handle('git:operation', async (_event, { cwd, action, payload }) => gitService.operation(cwd || projectRoot.get(), action, payload));
+  ipcMain.handle('git:watch', (event, cwd) => {
+    stopGitWatch(event.sender);
+    const activeCwd = cwd || projectRoot.get();
+    const stop = gitService.watch(activeCwd, () => refreshGitSubscriber(event.sender, activeCwd));
+    gitSubscriptions.set(event.sender.id, stop);
+    event.sender.once('destroyed', () => stopGitWatch(event.sender));
+    return true;
+  });
+  ipcMain.handle('git:unwatch', (event) => { stopGitWatch(event.sender); return true; });
   // The active project root is deliberately main-process state so the file
   // tree, PTY spawner, and model tool loop cannot silently drift apart.
   ipcMain.handle('project-root:get', () => projectRoot.get());
@@ -17,8 +40,21 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     // terminal renderer too, so already-running shells cannot retain a prior
     // project cwd after File > Open Folder is used in either window.
     ptyManager.send('project-root:changed', { root: assigned, sourceWebContentsId: event.sender.id });
+    refreshGitSubscriber(event.sender, assigned);
     return assigned;
   });
+
+  // Development sidebar services stay in the main process so workspace data,
+  // Git credentials, and registry networking are never exposed to the renderer.
+  ipcMain.handle('workspace:search', async (event, query) => {
+    const root = projectRoot.get();
+    if (!root) return { results: [], reason: 'Open a folder to search.' };
+    const normalized = String(query || '').trim().toLowerCase();
+    if (!normalized) return { results: [] };
+    return { results: await developmentServices.walk(root, normalized, []) };
+  });
+  ipcMain.handle('marketplace:search', (event, { query, offset, size }) => developmentServices.marketplaceSearch(query, offset, size));
+  ipcMain.handle('marketplace:details', (event, identifier) => developmentServices.marketplaceDetails(identifier));
 
   // PTY session handlers
   ipcMain.handle('pty:create', async (event, params) => {
@@ -278,6 +314,7 @@ function registerIpcHandlers({ openEditorFile } = {}) {
       console.log(`[FS WRITE ASSERTION] IPC fs:write-file writing to path: ${target}`);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, content, { encoding: 'utf8' });
+      refreshGitSubscriber(event.sender, projectRoot.get());
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };

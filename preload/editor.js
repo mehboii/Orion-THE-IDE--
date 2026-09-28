@@ -12,6 +12,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:write-file', { filePath, content }),
   watchFile: (filePath) => ipcRenderer.invoke('fs:watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('fs:unwatch-file', filePath),
+  gitStatus: (cwd) => ipcRenderer.invoke('git:status', cwd),
+  watchGit: (cwd) => ipcRenderer.invoke('git:watch', cwd),
+  onGitStatusChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('git:status-changed', handler);
+    return () => ipcRenderer.removeListener('git:status-changed', handler);
+  },
   onFileChanged: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('file-changed', handler);

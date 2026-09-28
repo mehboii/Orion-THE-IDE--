@@ -1,12 +1,12 @@
 {
   "name": "agent-terminal-ide",
-  "version": "8.0.0",
+  "version": "9.0.0",
   "description": "Desktop Terminal IDE for managing multiple CLI coding agents (Claude, Codex, Aider) simultaneously in a grid layout",
   "main": "main/index.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test": "npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug",
+    "test": "npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug && npm run test:git",
     "rebuild": "npx @electron/rebuild -v 31.2.0",
     "postinstall": "npx @electron/rebuild -v 31.2.0",
     "dist": "npm run dist:linux",
@@ -20,7 +20,8 @@
     "test:code-editor": "node test/verify_code_editor.js",
     "test:editor-fixes": "node test/verify_editor_fixes.js",
     "test:editor-window": "node test/verify_editor_window.js",
-    "test:run-debug": "node test/verify_run_debug_and_cwd.js"
+    "test:run-debug": "node test/verify_run_debug_and_cwd.js",
+    "test:git": "node test/git-service.js"
   },
   "keywords": [
     "electron",
@@ -52,7 +53,7 @@
   },
   "build": {
     "appId": "com.antigravity.agent-terminal-ide",
-    "productName": "Agent Terminal IDE",
+    "productName": "ORION IDE",
     "npmRebuild": false,
     "directories": {
       "output": "dist"
@@ -120,7 +121,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Agent Terminal IDE"
+      "shortcutName": "ORION IDE"
     }
   },
   "allowScripts": {
