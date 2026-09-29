@@ -310,8 +310,13 @@ kbd {
 
 /* Functional activity views. These are intentionally compact so the terminal
    workbench remains the primary surface on smaller desktop windows. */
-.sidebar-panel { display: none; min-height: 100%; }
-.sidebar-panel.active { display: block; }
+.sidebar-panel { display: none; min-height: 0; }
+.sidebar-panel.active { display: block; flex: 1; min-height: 0; overflow: auto; }
+.sidebar-panel.active[data-panel="explorer"] { display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-panel[data-panel="explorer"] .sidebar-section[data-section="files"] { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.sidebar-panel[data-panel="explorer"] #sidebar-file-tree { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.sidebar-panel[data-panel="explorer"] .sidebar-section[data-section="sessions"] { flex: 0 1 auto; min-height: 0; max-height: 34%; }
+.sidebar-panel[data-panel="explorer"] #sidebar-sessions-list { max-height: 100%; overflow: auto; overscroll-behavior: contain; }
 .panel-pad { padding: 12px; color: var(--vscode-sideBar-foreground); }
 .panel-pad h2 { margin: 2px 0 8px; font-size: 14px; letter-spacing: .02em; }
 .panel-muted { color: #a6afbd; font-size: 12px; line-height: 1.5; padding: 8px 0; }
@@ -400,7 +405,9 @@ kbd {
 .side-bar-body {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   overflow-x: hidden;
 }
 .side-bar-body::-webkit-scrollbar { width: 10px; }

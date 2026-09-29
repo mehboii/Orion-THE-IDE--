@@ -1,7 +1,8 @@
 {
   "name": "agent-terminal-ide",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "description": "Desktop Terminal IDE for managing multiple CLI coding agents (Claude, Codex, Aider) simultaneously in a grid layout",
+  "homepage": "https://github.com/mehboii/Orion-THE-IDE-",
   "main": "main/index.js",
   "scripts": {
     "start": "electron .",
@@ -21,7 +22,8 @@
     "test:editor-fixes": "node test/verify_editor_fixes.js",
     "test:editor-window": "node test/verify_editor_window.js",
     "test:run-debug": "node test/verify_run_debug_and_cwd.js",
-    "test:git": "node test/git-service.js"
+    "test:git": "node test/git-service.js",
+    "test:explorer-stability": "node test/verify-explorer-stability.js"
   },
   "keywords": [
     "electron",

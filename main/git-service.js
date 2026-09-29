@@ -152,12 +152,14 @@ class GitService {
     this.repositoryFor(cwd).then((root) => {
       if (!root || closed) return;
       // Watch the repository root so external editor and terminal changes are
-      // noticed; ignore noisy node_modules/.git internals in the callback.
+      // noticed. Git operations write inside .git, so observing it creates a
+      // feedback loop of status refreshes without changing decorations.
       try { watcher = fs.watch(root, { recursive: true }, (_event, name) => {
         const value = String(name || '');
-        if (!value.includes('node_modules')) notify();
+        const parts = value.split(/[\\/]/);
+        const gitMetadataChanged = parts[0] === '.git' && (parts.includes('index') || parts.includes('HEAD') || parts.includes('refs'));
+        if ((!parts.includes('node_modules') && !parts.includes('.git')) || gitMetadataChanged) notify();
       }); watcher.on('error', () => {}); } catch (_) {}
-      notify();
     });
     return () => { closed = true; clearTimeout(timer); try { watcher?.close(); } catch (_) {} };
   }

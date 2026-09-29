@@ -27,12 +27,19 @@ class FileExplorer {
     this.selectedFilePath = null;
     this.gitRoot = null;
     this.gitStatuses = new Map();
+    this.directoryGitStatuses = new Map();
     this.watchedRootDir = null;
-    this.unsubscribeFileChanges = window.electronAPI.onFileChanged(({ filePath }) => {
-      // The main process watches the open root. A rerender keeps the Explorer
-      // in sync when terminal agents create, rename, or remove files there.
-      if (this.watchedRootDir && filePath === this.watchedRootDir) this.render();
+    this._rendering = null;
+    this._refreshQueued = false;
+    this._pendingDirectories = new Set();
+    this.unsubscribeFileChanges = window.electronAPI.onFileChanged(({ filePath, eventType }) => {
+      // This watcher is only for structural changes. Git decorations are
+      // patched in place below, so terminal output never rebuilds the tree.
+      if (this.watchedRootDir && eventType !== 'change' && this.isWithinRoot(filePath)) {
+        this.queueRefresh(this.parentDirectoryForChange(filePath));
+      }
     });
+    window.addEventListener('beforeunload', () => this.dispose(), { once: true });
 
     if (this.openFolderBtnEl) {
       this.openFolderBtnEl.addEventListener('click', () => this.handleOpenFolderClick());
@@ -46,20 +53,68 @@ class FileExplorer {
   onRootChange(fn) { this.onRootChangeCallback = fn; }
 
   setGitStatus(status) {
-    this.gitRoot = status?.root || null;
-    this.gitStatuses = new Map((status?.files || []).map((file) => [String(file.path).replace(/\\/g, '/'), file]));
-    this.render();
+    const nextRoot = status?.root || null;
+    const nextStatuses = new Map((status?.files || []).map((file) => [String(file.path).replace(/\\/g, '/'), file]));
+    if (nextRoot === this.gitRoot && this.sameGitStatuses(nextStatuses)) return;
+    const rootChanged = nextRoot !== this.gitRoot;
+    const previousFiles = this.gitStatuses;
+    const previousDirectories = this.directoryGitStatuses;
+    this.gitRoot = nextRoot;
+    this.gitStatuses = nextStatuses;
+    this.directoryGitStatuses = this.buildDirectoryGitStatuses(nextRoot, nextStatuses);
+    const changed = new Set();
+    for (const key of new Set([...previousFiles.keys(), ...nextStatuses.keys()])) {
+      if (!this.sameGitStatus(previousFiles.get(key), nextStatuses.get(key))) changed.add(key);
+    }
+    for (const key of new Set([...previousDirectories.keys(), ...this.directoryGitStatuses.keys()])) {
+      if (!this.sameGitStatus(previousDirectories.get(key), this.directoryGitStatuses.get(key))) changed.add(key);
+    }
+    // Repository changes invalidate relative keys; otherwise patch only the
+    // file and ancestor folders whose decoration actually changed.
+    this.updateGitDecorations(rootChanged ? null : changed);
+  }
+
+  sameGitStatus(a, b) {
+    return a === b || (!!a && !!b && a.kind === b.kind && a.badge === b.badge && a.staged === b.staged && a.unstaged === b.unstaged);
+  }
+
+  sameGitStatuses(nextStatuses) {
+    if (nextStatuses.size !== this.gitStatuses.size) return false;
+    for (const [filePath, status] of nextStatuses) {
+      const current = this.gitStatuses.get(filePath);
+      if (!this.sameGitStatus(current, status)) return false;
+    }
+    return true;
   }
 
   gitStatusFor(filePath, isDirectory = false) {
     if (!this.gitRoot) return null;
-    const root = this.gitRoot.replace(/\\/g, '/').replace(/\/$/, '');
-    const relative = String(filePath).replace(/\\/g, '/').slice(root.length + 1);
+    const relative = this.gitRelativePath(filePath);
     if (!isDirectory) return this.gitStatuses.get(relative) || null;
-    const matches = [...this.gitStatuses.entries()].filter(([candidate]) => candidate.startsWith(`${relative}/`)).map(([, item]) => item);
-    if (!matches.length) return null;
+    return this.directoryGitStatuses.get(relative) || null;
+  }
+
+  gitRelativePath(filePath) {
+    if (!this.gitRoot) return '';
+    const root = this.gitRoot.replace(/\\/g, '/').replace(/\/$/, '');
+    const value = String(filePath).replace(/\\/g, '/');
+    return value === root ? '' : value.slice(root.length + 1);
+  }
+
+  buildDirectoryGitStatuses(root, statuses) {
+    const directories = new Map();
+    if (!root) return directories;
     const priority = { conflict: 6, deleted: 5, modified: 4, renamed: 3, added: 2, untracked: 1 };
-    return matches.sort((a, b) => (priority[b.kind] || 0) - (priority[a.kind] || 0))[0];
+    for (const [filePath, status] of statuses) {
+      let directory = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '';
+      while (true) {
+        const current = directories.get(directory);
+        if (!current || (priority[status.kind] || 0) > (priority[current.kind] || 0)) directories.set(directory, status);
+        if (!directory) break;
+        directory = directory.includes('/') ? directory.slice(0, directory.lastIndexOf('/')) : '';
+      }
+    }
+    return directories;
   }
 
   async handleOpenFolderClick() {
@@ -90,8 +145,79 @@ class FileExplorer {
     await this.render();
   }
 
+  isWithinRoot(filePath) {
+    const root = String(this.watchedRootDir).replace(/\\/g, '/').replace(/\/$/, '');
+    const candidate = String(filePath || '').replace(/\\/g, '/');
+    return candidate === root || candidate.startsWith(`${root}/`);
+  }
+
+  parentDirectoryForChange(filePath) {
+    const normalized = String(filePath).replace(/\\/g, '/');
+    const root = String(this.currentRootDir).replace(/\\/g, '/').replace(/\/$/, '');
+    if (normalized === root) return this.currentRootDir;
+    return normalized.slice(0, normalized.lastIndexOf('/')) || this.currentRootDir;
+  }
+
+  queueRefresh(directory = this.currentRootDir) {
+    if (directory) this._pendingDirectories.add(directory);
+    if (this._refreshQueued) return;
+    this._refreshQueued = true;
+    Promise.resolve().then(async () => {
+      this._refreshQueued = false;
+      const directories = [...this._pendingDirectories];
+      this._pendingDirectories.clear();
+      for (const changedDirectory of directories) await this.refreshDirectory(changedDirectory);
+    }).catch((error) => console.error('Explorer refresh failed:', error));
+  }
+
+  childContainerFor(dirPath) {
+    if (dirPath === this.currentRootDir) return this.containerEl.querySelector('.file-tree-list');
+    return [...this.containerEl.querySelectorAll('[data-explorer-children-for]')]
+      .find((element) => element.dataset.explorerChildrenFor === dirPath) || null;
+  }
+
+  async refreshDirectory(dirPath) {
+    if (!this.currentRootDir || !this.isWithinRoot(dirPath)) return;
+    const container = this.childContainerFor(dirPath);
+    // A collapsed directory has no visible structure to reconcile. Its next
+    // expansion reads current entries, with no work or layout shift now.
+    if (!container) return;
+    const scroll = this.scrollState();
+    const depth = Number(container.dataset.explorerDepth || 0);
+    await this.populateDirNode(dirPath, container, depth, true);
+    if (scroll) {
+      scroll.element.scrollTop = scroll.top;
+      scroll.element.scrollLeft = scroll.left;
+    }
+  }
+
+  scrollState() {
+    const scrollParent = this.containerEl;
+    return scrollParent ? { element: scrollParent, top: scrollParent.scrollTop, left: scrollParent.scrollLeft } : null;
+  }
+
   async render() {
     if (!this.containerEl) return;
+    if (this._rendering) {
+      this._refreshQueued = true;
+      return this._rendering;
+    }
+    const scroll = this.scrollState();
+    this._rendering = this.renderTree().finally(() => {
+      if (scroll) {
+        scroll.element.scrollTop = scroll.top;
+        scroll.element.scrollLeft = scroll.left;
+      }
+      this._rendering = null;
+      if (this._refreshQueued) {
+        this._refreshQueued = false;
+        this.queueRefresh();
+      }
+    });
+    return this._rendering;
+  }
+
+  async renderTree() {
     this.containerEl.innerHTML = '';
 
     if (!this.currentRootDir) {
@@ -108,6 +234,8 @@ class FileExplorer {
 
     const header = document.createElement('div');
     header.className = 'file-tree-root-header tree-item folder';
+    header.dataset.explorerPath = this.currentRootDir;
+    header.dataset.explorerDirectory = 'true';
     header.setAttribute('role', 'button');
     header.tabIndex = 0;
     header.setAttribute('aria-expanded', String(this.expandedDirs.has(this.currentRootDir)));
@@ -136,11 +264,27 @@ class FileExplorer {
     rootList.className = 'file-tree-list';
     this.containerEl.appendChild(rootList);
 
+    rootList.dataset.explorerDepth = '0';
     if (this.expandedDirs.has(this.currentRootDir)) await this.populateDirNode(this.currentRootDir, rootList, 0);
   }
 
-  async populateDirNode(dirPath, parentElement, depth) {
+  async populateDirNode(dirPath, parentElement, depth, replace = false) {
     const entries = await window.electronAPI.readDir(dirPath);
+    // Preserve complete, unchanged entry subtrees. Besides avoiding needless
+    // work for large directories, this keeps DOM identity, focus and nested
+    // expansion state intact when a sibling is created, deleted or renamed.
+    const reusable = new Map();
+    if (replace) {
+      const children = [...parentElement.children];
+      for (let index = 0; index < children.length; index += 1) {
+        const item = children[index];
+        const entryPath = item.dataset?.explorerPath;
+        if (!entryPath) continue;
+        const treeChildren = item.dataset.explorerDirectory === 'true' ? children[index + 1] : null;
+        reusable.set(entryPath, { item, treeChildren });
+      }
+      parentElement.replaceChildren();
+    }
     if (window.__IDE_TEST_MODE__) console.info('[FileExplorer] read-dir', dirPath, Array.isArray(entries) ? entries.length : 'invalid');
     if (!entries || entries.length === 0) {
       if (depth > 0) {
@@ -159,7 +303,15 @@ class FileExplorer {
     });
 
     for (const entry of sortedEntries) {
+      const preserved = reusable.get(entry.path);
+      if (preserved) {
+        parentElement.appendChild(preserved.item);
+        if (preserved.treeChildren?.dataset.explorerChildrenFor === entry.path) parentElement.appendChild(preserved.treeChildren);
+        continue;
+      }
       const itemEl = document.createElement('div');
+      itemEl.dataset.explorerPath = entry.path;
+      itemEl.dataset.explorerDirectory = String(entry.isDirectory);
       const isExpanded = entry.isDirectory && this.expandedDirs.has(entry.path);
       itemEl.className = `tree-item ${entry.isDirectory ? 'folder' : 'file'}${this.selectedFilePath === entry.path ? ' selected' : ''}`;
       itemEl.style.paddingLeft = `${depth * 14 + 8}px`;
@@ -180,6 +332,8 @@ class FileExplorer {
       if (entry.isDirectory) {
         const childContainer = document.createElement('div');
         childContainer.className = 'tree-children';
+        childContainer.dataset.explorerChildrenFor = entry.path;
+        childContainer.dataset.explorerDepth = String(depth + 1);
         if (!this.expandedDirs.has(entry.path)) {
           childContainer.style.display = 'none';
         }
@@ -226,6 +380,47 @@ class FileExplorer {
     if (normalizedName === 'dockerfile') return { label: 'D', color: 'blue' };
     const ext = normalizedName.includes('.') ? normalizedName.split('.').pop() : '';
     return FILE_ICON_MAP[ext] || { label: '\u2022', color: 'muted' };
+  }
+
+  updateGitDecorations(changedPaths = null) {
+    if (!this.containerEl) return;
+    this.containerEl.querySelectorAll('[data-explorer-path]').forEach((itemEl) => {
+      const filePath = itemEl.dataset.explorerPath;
+      const isDirectory = itemEl.dataset.explorerDirectory === 'true';
+      const key = this.gitRelativePath(filePath);
+      if (changedPaths && !changedPaths.has(key)) return;
+      const git = this.gitStatusFor(filePath, isDirectory);
+      ['conflict', 'deleted', 'modified', 'renamed', 'added', 'untracked'].forEach((kind) => itemEl.classList.remove(`git-${kind}`));
+      if (git) itemEl.classList.add(`git-${git.kind}`);
+
+      const label = itemEl.classList.contains('file-tree-root-header')
+        ? itemEl.querySelector('.file-tree-root-title')
+        : itemEl;
+      if (label) ['conflict', 'deleted', 'modified', 'renamed', 'added', 'untracked'].forEach((kind) => label.classList.remove(`git-${kind}`));
+      if (git && label) label.classList.add(`git-${git.kind}`);
+
+      let badge = itemEl.querySelector(':scope > .git-status-badge');
+      if (!git) {
+        badge?.remove();
+      } else if (badge) {
+        badge.className = `git-status-badge git-${git.kind}`;
+        badge.title = `${git.kind}${git.staged && git.unstaged ? ' (staged and unstaged)' : ''}`;
+        badge.textContent = git.badge;
+      } else {
+        badge = document.createElement('span');
+        badge.className = `git-status-badge git-${git.kind}`;
+        badge.title = `${git.kind}${git.staged && git.unstaged ? ' (staged and unstaged)' : ''}`;
+        badge.textContent = git.badge;
+        itemEl.appendChild(badge);
+      }
+    });
+  }
+
+  dispose() {
+    this.unsubscribeFileChanges?.();
+    this.unsubscribeFileChanges = null;
+    if (this.watchedRootDir) window.electronAPI.unwatchFile(this.watchedRootDir);
+    this.watchedRootDir = null;
   }
 
   escapeHtml(value) {
