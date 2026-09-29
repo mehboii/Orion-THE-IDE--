@@ -131,8 +131,6 @@ class AppController {
       // Folder and using an earlier pane-local/default cwd.
       const canonicalRoot = await window.electronAPI.setProjectRoot(dirPath);
       console.info('[OPENED FOLDER] Renderer confirmed project root:', canonicalRoot);
-      await window.electronAPI.watchGit?.(canonicalRoot);
-      this.applyGitStatus(await window.electronAPI.gitStatus?.(canonicalRoot));
       return canonicalRoot;
     });
 
@@ -142,8 +140,7 @@ class AppController {
     if (window.electronAPI.onGitStatusChanged) {
       window.electronAPI.onGitStatusChanged((status) => this.applyGitStatus(status));
       if (projectRoot) {
-        await window.electronAPI.watchGit(projectRoot);
-        this.applyGitStatus(await window.electronAPI.gitStatus(projectRoot));
+        this.applyGitStatus(await window.electronAPI.watchGit(projectRoot));
       }
     }
 
@@ -196,6 +193,7 @@ class AppController {
           if (root && this.fileExplorer && this.fileExplorer.currentRootDir !== root) {
             await this.fileExplorer.setRootDirectory(root, true, false);
           }
+          if (root) this.applyGitStatus(await window.electronAPI.watchGit(root));
           await this.syncPanesToOpenedFolder(root);
         })
         .catch((error) => this.showBanner(`Could not apply opened folder to terminals: ${error.message}`, 'error'));
@@ -741,23 +739,37 @@ class AppController {
   /* ---------- Sidebar ---------- */
   renderSidebarSessions() {
     if (!this.sidebarSessionsList) return;
-    this.sidebarSessionsList.innerHTML = '';
     if (this.panes.size === 0) {
-      this.sidebarSessionsList.innerHTML = '<div class="tree-empty">No active panes</div>';
+      let empty = this.sidebarSessionsList.querySelector('.tree-empty');
+      if (!empty) {
+        this.sidebarSessionsList.replaceChildren();
+        empty = document.createElement('div');
+        empty.className = 'tree-empty';
+        empty.textContent = 'No active panes';
+        this.sidebarSessionsList.appendChild(empty);
+      }
       return;
     }
+    this.sidebarSessionsList.querySelector('.tree-empty')?.remove();
+    const rows = new Map([...this.sidebarSessionsList.querySelectorAll('[data-pane-id]')].map((row) => [row.dataset.paneId, row]));
+    const paneIds = new Set([...this.panes.keys()].map(String));
+    for (const [paneId, row] of rows) {
+      if (!paneIds.has(paneId)) row.remove();
+    }
     for (const pane of this.panes.values()) {
-      const row = document.createElement('button');
-      row.type = 'button';
+      let row = rows.get(String(pane.id));
+      if (!row) {
+        row = document.createElement('button');
+        row.type = 'button';
+        row.dataset.paneId = pane.id;
+        row.innerHTML = '<span class="tree-dot"></span><span class="tree-label"></span><span class="tree-meta"></span>';
+        row.addEventListener('click', () => this.focusPane(pane.id));
+        this.sidebarSessionsList.appendChild(row);
+      }
       row.className = 'tree-item' + (pane.id === this.focusedPaneId ? ' active' : '');
-      row.dataset.paneId = pane.id;
-      row.innerHTML = `
-        <span class="tree-dot ${pane.status}"></span>
-        <span class="tree-label">${this.escapeHtml(pane.label)}</span>
-        <span class="tree-meta">${pane.status}</span>
-      `;
-      row.addEventListener('click', () => this.focusPane(pane.id));
-      this.sidebarSessionsList.appendChild(row);
+      row.querySelector('.tree-dot').className = `tree-dot ${pane.status}`;
+      row.querySelector('.tree-label').textContent = pane.label;
+      row.querySelector('.tree-meta').textContent = pane.status;
     }
   }
 

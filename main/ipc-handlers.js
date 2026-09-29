@@ -10,24 +10,50 @@ const developmentServices = require('./development-services');
 
 function registerIpcHandlers({ openEditorFile } = {}) {
   const gitSubscriptions = new Map();
+  const gitRefreshes = new Map();
   const stopGitWatch = (sender) => {
     const stop = gitSubscriptions.get(sender.id);
     if (stop) stop();
     gitSubscriptions.delete(sender.id);
+    gitRefreshes.delete(sender.id);
   };
   const refreshGitSubscriber = async (sender, cwd) => {
-    try { sender.send('git:status-changed', await gitService.status(cwd)); } catch (_) {}
+    const key = sender.id;
+    const state = gitRefreshes.get(key) || { inFlight: false, pending: false, signature: null };
+    if (state.inFlight) {
+      state.pending = true;
+      gitRefreshes.set(key, state);
+      return;
+    }
+    state.inFlight = true;
+    gitRefreshes.set(key, state);
+    try {
+      const status = await gitService.status(cwd);
+      const signature = JSON.stringify(status);
+      if (signature !== state.signature && !sender.isDestroyed()) {
+        state.signature = signature;
+        sender.send('git:status-changed', status);
+      }
+    } catch (_) {
+      // A folder may disappear while a watcher callback is queued.
+    } finally {
+      state.inFlight = false;
+      if (state.pending) {
+        state.pending = false;
+        refreshGitSubscriber(sender, cwd);
+      }
+    }
   };
   ipcMain.handle('git:status', (_event, cwd) => gitService.status(cwd || projectRoot.get()));
   ipcMain.handle('git:diff', (_event, { cwd, filePath, staged }) => gitService.diff(cwd || projectRoot.get(), filePath, staged));
   ipcMain.handle('git:operation', async (_event, { cwd, action, payload }) => gitService.operation(cwd || projectRoot.get(), action, payload));
-  ipcMain.handle('git:watch', (event, cwd) => {
+  ipcMain.handle('git:watch', async (event, cwd) => {
     stopGitWatch(event.sender);
     const activeCwd = cwd || projectRoot.get();
     const stop = gitService.watch(activeCwd, () => refreshGitSubscriber(event.sender, activeCwd));
     gitSubscriptions.set(event.sender.id, stop);
     event.sender.once('destroyed', () => stopGitWatch(event.sender));
-    return true;
+    return gitService.status(activeCwd);
   });
   ipcMain.handle('git:unwatch', (event) => { stopGitWatch(event.sender); return true; });
   // The active project root is deliberately main-process state so the file
@@ -40,7 +66,6 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     // terminal renderer too, so already-running shells cannot retain a prior
     // project cwd after File > Open Folder is used in either window.
     ptyManager.send('project-root:changed', { root: assigned, sourceWebContentsId: event.sender.id });
-    refreshGitSubscriber(event.sender, assigned);
     return assigned;
   });
 
@@ -330,12 +355,25 @@ function registerIpcHandlers({ openEditorFile } = {}) {
       const key = watcherKey(event.sender, target);
       if (fileWatchers.has(key)) return true;
       let debounceTimer = null;
-      const watcher = fs.watch(target, () => {
+      // Windows supports recursive fs.watch, allowing a single owner per
+      // workspace to identify nested structural changes. Other platforms use
+      // their native non-recursive watcher rather than creating a watcher for
+      // every directory.
+      const watcher = fs.watch(target, process.platform === 'win32' ? { recursive: true } : {}, (eventType, filename) => {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           const win = event.sender.getOwnerBrowserWindow();
           if (win && !win.isDestroyed()) {
-            win.webContents.send('file-changed', { filePath: target });
+            // fs.watch reports a name relative to the watched directory.  Do
+            // not discard it: consumers need the affected parent directory
+            // to avoid rebuilding an entire Explorer tree for one entry.
+            const changedPath = filename ? path.resolve(target, String(filename)) : target;
+            const relativeParts = path.relative(target, changedPath).split(path.sep);
+            // Generated output is intentionally not a source-tree refresh
+            // trigger. Git continues to make an independent decision about
+            // whether an unignored file merits a decoration.
+            if (relativeParts.some((part) => ['node_modules', 'dist', 'build', '.cache', '.next'].includes(part))) return;
+            win.webContents.send('file-changed', { filePath: changedPath, eventType });
           }
         }, 150);
       });
