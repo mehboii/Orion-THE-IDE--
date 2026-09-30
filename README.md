@@ -11,7 +11,7 @@
 
 ## Core Features.
 
-- **Dynamic Terminal Grid Layout**: Manage 4–6 terminal panes simultaneously arranged in **2x3** or **3x2** layout grids with real-time xterm.js reflowing on window and pane resize.
+- **Dynamic Terminal Grid Layout**: Manage 4–6 terminal panes simultaneously arranged in **2x3** or **3x2** layout grids with real-time xterm.js reflowing on window and pane resize
 - **tmux Persistent Backend**: Every terminal session is backed by a detached tmux session (`tmux new-session -A -s ide-<uuid>`). If the app crashes or quits, your CLI agent tasks continue executing in the background and reattach seamlessly upon app restart with scrollback intact.
 - **Orphan Session Detection & Recovery**: Automatically detects orphaned `ide-*` tmux sessions on app startup and offers a 1-click interface to reattach them into active grid panes.
 - **CLI Agent Presets**: Pre-populated with presets for **Claude Code** (`claude`), **Codex CLI** (`codex`), **Aider AI** (`aider`), and interactive system shells (`bash`/`zsh`).
