@@ -1,6 +1,6 @@
 # Agent Terminal IDE.
 
-> **Desktop Terminal IDE for launching, managing, and multiplexing multiple CLI coding agents (Claude Code, Codex CLI, Aider) in a high-performance grid layout for Windows, macOS, and Linux.**
+> **Desktop Terminal IDE for launching, managing, and multiplexing multiple CLI coding agents (Claude Code, Codex CLI, Aider) in a high-performance grid layout for Windows, macOS, and Linux**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Electron](https://img.shields.io/badge/Electron-31.2.0-blue)
