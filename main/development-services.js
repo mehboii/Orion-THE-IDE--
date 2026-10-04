@@ -1,30 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const https = require('https');
+const { requestJson } = require('./marketplace-http');
 const projectRoot = require('./project-root');
 
 function exec(command, args, cwd) {
   return new Promise((resolve) => execFile(command, args, { cwd, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
     resolve({ ok: !error, stdout: stdout || '', stderr: stderr || '', code: error?.code });
   }));
-}
-
-function requestJson(url, signal) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { Accept: 'application/json', 'User-Agent': 'Orion-IDE/1.0' } }, (res) => {
-      let body = '';
-      res.setEncoding('utf8');
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(`Marketplace responded with HTTP ${res.statusCode}.`));
-        try { resolve(JSON.parse(body)); } catch (_) { reject(new Error('Marketplace returned invalid JSON.')); }
-      });
-    });
-    req.setTimeout(12000, () => req.destroy(new Error('Marketplace request timed out.')));
-    req.on('error', error => reject(new Error(`Marketplace unavailable: ${error.message}`)));
-    if (signal) signal.addEventListener('abort', () => req.destroy(new Error('Marketplace request cancelled.')), { once: true });
-  });
 }
 
 function relative(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
@@ -71,7 +54,7 @@ async function gitAction(action, filePath, message) {
 function normalizeExtension(item) {
   const ns = item.namespace || item.publisher || '';
   const name = item.name || item.extensionName || '';
-  return { id: item.namespace && item.name ? `${item.namespace}.${item.name}` : item.id || `${ns}.${name}`, name: item.displayName || name, publisher: ns, description: item.description || '', version: item.version || item.latestVersion || '', iconUrl: item.iconUrl || null, downloadCount: Number.isFinite(item.downloadCount) ? item.downloadCount : null, categories: item.categories || [], tags: item.tags || [], provider: 'open-vsx', compatible: false, compatibilityMessage: 'Open VSX publishes VS Code-format VSIX packages. Orion does not execute that API format, so installation is intentionally blocked.' };
+  return { id: item.namespace && item.name ? `${item.namespace}.${item.name}` : item.id || `${ns}.${name}`, name: item.displayName || name, publisher: ns, description: item.description || '', version: item.version || item.latestVersion || '', iconUrl: item.iconUrl || null, downloadCount: Number.isFinite(item.downloadCount) ? item.downloadCount : null, categories: item.categories || [], tags: item.tags || [], provider: 'open-vsx', installable: true, compatibilityMessage: 'Install this Open VSX package in Orion. Color themes and snippets are supported; executable features require a VS Code-compatible extension host that Orion does not yet provide.' };
 }
 
 async function marketplaceSearch(query, offset = 0, size = 30) {

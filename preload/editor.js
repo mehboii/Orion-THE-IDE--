@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  getExtensionContributions: () => ipcRenderer.invoke('extensions:contributions'),
+  onExtensionsChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('extensions:changed', handler);
+    return () => ipcRenderer.removeListener('extensions:changed', handler);
+  },
   getProjectRoot: () => ipcRenderer.invoke('project-root:get'),
   setProjectRoot: (root) => ipcRenderer.invoke('project-root:set', root),
   selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:select-directory', defaultPath),

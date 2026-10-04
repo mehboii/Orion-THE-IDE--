@@ -21,7 +21,7 @@ class SidebarPanels {
     } catch (error) { panel.innerHTML = `<div class="panel-pad"><p class="panel-muted">${this.escape(error.message)}</p></div>`; }
   }
   constructor(app) { this.app = app; this.searchTimer = null; this.marketTimer = null; this.marketRequest = 0; this.extensionQuery = ''; }
-  escape(value) { const el = document.createElement('span'); el.textContent = String(value ?? ''); return el.innerHTML; }
+  escape(value) { const el = document.createElement('span'); el.textContent = String(value ?? ''); return el.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
   panel(name) { return document.querySelector(`.sidebar-panel[data-panel="${name}"]`); }
   activate(name) {
     document.querySelectorAll('.sidebar-panel').forEach(el => el.classList.toggle('active', el.dataset.panel === name));
@@ -52,12 +52,72 @@ class SidebarPanels {
   renderRunDebug() { const panel = this.panel('run-debug'); if (!panel) return; const panes = [...this.app.panes.values()]; panel.innerHTML = `<div class="panel-pad"><p class="panel-muted">Run configurations use Orion's real terminal sessions. Node files can be debugged from the detached editor.</p><button class="btn btn-primary" id="run-new-pane">New terminal session</button><div class="run-list">${panes.map(p => `<div class="run-item"><strong>${this.escape(p.label)}</strong><span>${this.escape(p.status || 'running')} · ${this.escape(p.cwd || '')}</span><button class="icon-text-btn" data-pane="${p.id}">Focus</button></div>`).join('') || '<div class="panel-muted">No active terminal sessions.</div>'}</div></div>`; panel.querySelector('#run-new-pane').onclick = () => this.app.createPane({}); panel.querySelectorAll('[data-pane]').forEach(btn => btn.onclick = () => this.app.focusPane(Number(btn.dataset.pane))); }
   renderExtensions() {
     const panel = this.panel('extensions'); if (!panel || panel.dataset.ready) return; panel.dataset.ready = 'true';
-    panel.innerHTML = `<div class="panel-pad extension-panel"><div class="extension-search"><input id="marketplace-search" class="text-input" placeholder="Search Open VSX extensions" autocomplete="off"><button id="marketplace-clear" class="icon-text-btn">Clear</button></div><div id="marketplace-state" class="panel-muted">Popular extensions from Open VSX</div><div id="marketplace-results" class="extension-results"></div><p class="marketplace-notice">Discovery uses Open VSX. Orion intentionally blocks VSIX installation because it does not implement the VS Code extension API or sandbox yet.</p></div>`;
-    const input = panel.querySelector('#marketplace-search'); input.addEventListener('input', () => { this.extensionQuery = input.value; clearTimeout(this.marketTimer); this.marketTimer = setTimeout(() => this.loadExtensions(input.value), 280); }); panel.querySelector('#marketplace-clear').onclick = () => { input.value = ''; this.extensionQuery = ''; this.loadExtensions(''); }; this.loadExtensions('');
+    panel.innerHTML = `<div class="panel-pad extension-panel"><div class="extension-search"><input id="marketplace-search" class="text-input" placeholder="Search Open VSX extensions" autocomplete="off"><button id="marketplace-clear" class="icon-text-btn">Clear</button></div><button id="marketplace-installed" class="icon-text-btn">Installed extensions</button><div id="marketplace-state" class="panel-muted">Popular extensions from Open VSX</div><div id="marketplace-results" class="extension-results"></div><p class="marketplace-notice">Install any extension category from Open VSX. Orion supports color themes and snippets. Executable extension features require a VS Code-compatible extension host, which is not available yet.</p></div>`;
+    const input = panel.querySelector('#marketplace-search');
+    input.value = this.extensionQuery;
+    input.addEventListener('input', () => { this.extensionQuery = input.value; clearTimeout(this.marketTimer); this.marketTimer = setTimeout(() => this.loadExtensions(input.value), 280); });
+    panel.querySelector('#marketplace-clear').onclick = () => { clearTimeout(this.marketTimer); input.value = ''; this.extensionQuery = ''; this.loadExtensions(''); };
+    panel.querySelector('#marketplace-installed').onclick = () => { clearTimeout(this.marketTimer); this.loadExtensions('', true); };
+    this.loadExtensions(this.extensionQuery);
   }
-  async loadExtensions(query) {
-    const panel = this.panel('extensions'); if (!panel) return; const state = panel.querySelector('#marketplace-state'); const results = panel.querySelector('#marketplace-results'); const request = ++this.marketRequest; state.textContent = 'Loading marketplace…'; results.innerHTML = '';
-    try { const data = await window.electronAPI.searchMarketplace(query); if (request !== this.marketRequest) return; state.textContent = `${data.total || data.results.length} result${(data.total || data.results.length) === 1 ? '' : 's'} · ${data.provider}`; results.innerHTML = data.results.map(x => `<button class="extension-card" data-id="${this.escape(x.id)}"><span class="extension-avatar">${this.escape((x.name || '?').slice(0, 1).toUpperCase())}</span><span><strong>${this.escape(x.name)}</strong><small>${this.escape(x.publisher)} · ${this.escape(x.version || 'version unavailable')}</small><em>${this.escape(x.description)}</em></span></button>`).join('') || '<div class="panel-muted">No extensions found.</div>'; results.querySelectorAll('.extension-card').forEach(btn => btn.onclick = () => this.showExtensionDetails(btn.dataset.id)); } catch (error) { if (request === this.marketRequest) state.textContent = error.message; }
+  async loadExtensions(query, installedOnly = false) {
+    const panel = this.panel('extensions'); if (!panel) return;
+    const state = panel.querySelector('#marketplace-state'); const results = panel.querySelector('#marketplace-results'); if (!state || !results) return;
+    const request = ++this.marketRequest; state.textContent = 'Loading extensions…'; results.innerHTML = '';
+    try {
+      const data = installedOnly ? { results: await window.electronAPI.listExtensions(), provider: 'Installed in Orion' } : await window.electronAPI.searchMarketplace(query);
+      if (request !== this.marketRequest || !state.isConnected) return;
+      const count = data.total ?? data.results.length;
+      state.textContent = `${count} result${count === 1 ? '' : 's'} · ${data.provider}`;
+      results.innerHTML = data.results.map(x => `<button class="extension-card" data-id="${this.escape(x.id)}"><span class="extension-avatar">${this.escape((x.name || '?').slice(0, 1).toUpperCase())}</span><span><strong>${this.escape(x.name)}</strong><small>${this.escape(x.publisher)} · ${this.escape(x.version || 'version unavailable')}${x.installed ? ' · Installed' : ''}</small><em>${this.escape(x.description)}</em></span></button>`).join('') || '<div class="panel-muted">No extensions found.</div>';
+      results.querySelectorAll('.extension-card').forEach(btn => btn.onclick = () => this.showExtensionDetails(btn.dataset.id));
+    } catch (error) { if (request === this.marketRequest && state.isConnected) state.textContent = error.message; }
   }
-  async showExtensionDetails(id) { const panel = this.panel('extensions'); panel.innerHTML = '<div class="panel-pad"><div class="panel-muted">Loading extension…</div></div>'; try { const x = await window.electronAPI.getMarketplaceDetails(id); panel.innerHTML = `<div class="panel-pad extension-detail"><button class="icon-text-btn" id="extension-back">← Back to results</button><h2>${this.escape(x.name)}</h2><p class="panel-muted">${this.escape(x.publisher)} · ${this.escape(x.version || 'version unavailable')}</p><p>${this.escape(x.description)}</p><div class="compatibility-warning">${this.escape(x.compatibilityMessage)}</div><button class="btn btn-secondary" disabled title="Unsupported package format">Install unavailable</button></div>`; panel.querySelector('#extension-back').onclick = () => { panel.dataset.ready = ''; this.renderExtensions(); const input = panel.querySelector('#marketplace-search'); if (input) { input.value = this.extensionQuery; this.loadExtensions(this.extensionQuery); } }; } catch (e) { panel.innerHTML = `<div class="panel-pad"><button class="icon-text-btn" id="extension-back">← Back</button><p class="panel-muted">${this.escape(e.message)}</p></div>`; panel.querySelector('#extension-back').onclick = () => { panel.dataset.ready = ''; this.renderExtensions(); }; } }
+  async showExtensionDetails(id) {
+    const panel = this.panel('extensions'); if (!panel) return;
+    clearTimeout(this.marketTimer);
+    const request = ++this.marketRequest;
+    const back = () => { ++this.marketRequest; panel.dataset.ready = ''; this.renderExtensions(); };
+    panel.innerHTML = '<div class="panel-pad"><div class="panel-muted">Loading extension…</div></div>';
+    try {
+      const x = await window.electronAPI.getMarketplaceDetails(id);
+      if (request !== this.marketRequest) return;
+      const update = x.installed && x.installedVersion !== x.version;
+      panel.innerHTML = `<div class="panel-pad extension-detail"><button class="icon-text-btn" id="extension-back">← Back to results</button><h2>${this.escape(x.name)}</h2><p class="panel-muted">${this.escape(x.publisher)} · ${this.escape(x.version || 'version unavailable')}${x.installed ? ` · Installed ${this.escape(x.installedVersion)}` : ''}</p><p>${this.escape(x.description)}</p><div class="compatibility-warning">${this.escape(x.runtimeMessage || x.compatibilityMessage)}</div>${!x.installed || update ? `<button id="extension-install" class="btn btn-primary">${update ? 'Update' : 'Install'}</button>` : ''}${x.installed ? '<button id="extension-uninstall" class="btn btn-secondary">Uninstall</button>' : ''}<div id="extension-theme-actions"></div><p id="extension-operation-state" class="panel-muted" role="status"></p></div>`;
+      panel.querySelector('#extension-back').onclick = back;
+      const operate = async action => {
+        const state = panel.querySelector('#extension-operation-state');
+        const buttons = [...panel.querySelectorAll('#extension-install, #extension-uninstall')];
+        buttons.forEach(button => button.disabled = true);
+        state.textContent = action === 'install' ? 'Downloading and installing extension and dependencies…' : 'Uninstalling extension…';
+        try {
+          if (action === 'install') await window.electronAPI.installExtension(id);
+          else await window.electronAPI.uninstallExtension(id);
+          if (request === this.marketRequest) await this.showExtensionDetails(id);
+        } catch (error) {
+          if (request === this.marketRequest) { state.textContent = error.message; buttons.forEach(button => button.disabled = false); }
+        }
+      };
+      const install = panel.querySelector('#extension-install'), uninstall = panel.querySelector('#extension-uninstall');
+      if (install) install.onclick = () => operate('install');
+      if (uninstall) uninstall.onclick = () => operate('uninstall');
+      if (x.installed) {
+        const contributions = await window.electronAPI.getExtensionContributions();
+        if (request !== this.marketRequest) return;
+        const themes = contributions.themes.filter(theme => theme.extensionId === id.toLowerCase());
+        const actions = panel.querySelector('#extension-theme-actions');
+        actions.innerHTML = themes.map((theme, index) => `<button class="icon-text-btn" data-theme-index="${index}">Use ${this.escape(theme.label || 'color theme')}</button>`).join('') + (themes.length ? '<button class="icon-text-btn" id="extension-theme-reset">Use default editor theme</button>' : '');
+        const selectTheme = async themeId => {
+          try { await window.electronAPI.setExtensionTheme(themeId); if (request === this.marketRequest) panel.querySelector('#extension-operation-state').textContent = 'Editor theme updated.'; }
+          catch (error) { if (request === this.marketRequest) panel.querySelector('#extension-operation-state').textContent = error.message; }
+        };
+        actions.querySelectorAll('[data-theme-index]').forEach(button => button.onclick = () => selectTheme(themes[Number(button.dataset.themeIndex)].id));
+        const reset = actions.querySelector('#extension-theme-reset'); if (reset) reset.onclick = () => selectTheme(null);
+      }
+    } catch (error) {
+      if (request !== this.marketRequest) return;
+      panel.innerHTML = `<div class="panel-pad"><button class="icon-text-btn" id="extension-back">← Back</button><p class="panel-muted">${this.escape(error.message)}</p></div>`;
+      panel.querySelector('#extension-back').onclick = back;
+    }
+  }
 }

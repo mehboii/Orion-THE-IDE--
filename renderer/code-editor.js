@@ -81,6 +81,10 @@ class CodeEditorManager {
       renderWhitespace: 'selection'
     });
 
+    if (window.electronAPI?.getExtensionContributions && typeof EditorExtensions !== 'undefined') {
+      this.extensions = new EditorExtensions(this.editor);
+    }
+
     // Handle gutter clicks for setting/clearing breakpoints
     this.editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
