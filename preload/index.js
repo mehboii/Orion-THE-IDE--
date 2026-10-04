@@ -114,7 +114,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('git:status-changed', handler);
   },
   updater: {
-    checkForUpdates: (options) => ipcRenderer.invoke('updater:check-for-updates', options),
+    checkForUpdates: () => ipcRenderer.invoke('updater:check-for-updates'),
     downloadUpdate: () => ipcRenderer.invoke('updater:download-update'),
     getStatus: () => ipcRenderer.invoke('updater:get-status'),
     installUpdate: () => ipcRenderer.invoke('updater:install-update'),
