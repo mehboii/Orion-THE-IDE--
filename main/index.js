@@ -1,5 +1,9 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
+// Electron integration checks use a disposable profile, including packaged builds.
+if (process.env.IDE_TEST_MODE === '1' && process.env.IDE_TEST_USER_DATA) {
+  app.setPath('userData', path.resolve(process.env.IDE_TEST_USER_DATA));
+}
 const ptyManager = require('./pty-manager');
 const runner = require('./runner');
 const { registerIpcHandlers } = require('./ipc-handlers');
@@ -10,6 +14,15 @@ let pendingEditorFiles = [];
 let editorReady = false;
 let editorDirty = false;
 let editorWebContentsId = null;
+
+function showBuildVersion(window, label) {
+  const title = `${label} v${app.getVersion()}`;
+  window.setTitle(title);
+  window.on('page-title-updated', event => {
+    event.preventDefault();
+    window.setTitle(title);
+  });
+}
 
 function getGlassWindowOptions() {
   return {
@@ -92,6 +105,7 @@ function openEditorFile(filePath) {
     }
   });
   editorWebContentsId = editorWindow.webContents.id;
+  showBuildVersion(editorWindow, 'ORION IDE — Editor');
   editorDirty = false;
   editorWindow.on('close', (event) => {
     if (!confirmEditorDiscard('Cancel and save your work, or discard the unsaved changes and close the editor.')) event.preventDefault();
@@ -173,6 +187,7 @@ function createWindow() {
   });
 
   ptyManager.setWindow(mainWindow);
+  showBuildVersion(mainWindow, 'ORION IDE');
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   // Keep automated window counts meaningful; opt in to a detached inspector

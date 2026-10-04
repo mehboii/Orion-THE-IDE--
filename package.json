@@ -1,6 +1,6 @@
 {
   "name": "agent-terminal-ide",
-  "version": "10.0.0",
+  "version": "13.0.1",
   "description": "Desktop Terminal IDE for managing multiple CLI coding agents (Claude, Codex, Aider) simultaneously in a grid layout",
   "homepage": "https://github.com/mehboii/Orion-THE-IDE-",
   "main": "main/index.js",
@@ -61,6 +61,7 @@
     "appId": "com.antigravity.agent-terminal-ide",
     "productName": "ORION IDE",
     "npmRebuild": false,
+    "afterPack": "build/verify-package.js",
     "directories": {
       "output": "dist"
     },
@@ -124,10 +125,12 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ORION IDE"
+      "shortcutName": "ORION IDE 13"
     }
   },
   "allowScripts": {

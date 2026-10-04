@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchMarketplace: (query, offset = 0, size = 30) => ipcRenderer.invoke('marketplace:search', { query, offset, size }),
   getMarketplaceDetails: (identifier) => ipcRenderer.invoke('marketplace:details', identifier),
   listExtensions: () => ipcRenderer.invoke('extensions:list'),
+  getExtensionLaunchInfo: (identifier, action) => ipcRenderer.invoke('extensions:launch-info', identifier, action),
   installExtension: (identifier) => ipcRenderer.invoke('extensions:install', identifier),
   uninstallExtension: (identifier) => ipcRenderer.invoke('extensions:uninstall', identifier),
   getExtensionContributions: () => ipcRenderer.invoke('extensions:contributions'),
