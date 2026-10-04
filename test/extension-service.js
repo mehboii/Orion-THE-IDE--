@@ -64,11 +64,28 @@ async function main() {
     let result = await service.install('Demo.Code');
     assert.equal(result.extension.id, 'demo.code');
     assert.equal(result.extension.requiresExtensionHost, true);
-    assert.match(result.extension.runtimeMessage, /does not yet provide/);
+    assert.match(result.extension.runtimeMessage, /Open Extension Editor/);
+    assert.equal(result.extension.launchActions[0].id, 'editor');
     assert.equal(await fs.readFile(path.join(root, 'demo.code', 'extension.js'), 'utf8'), 'throw new Error("MUST NOT EXECUTE DURING INSTALL");');
     assert(calls.some(url => url.endsWith('/win32-x64/latest')), 'request matching platform first');
     const restarted = new ExtensionService({ root });
     assert.equal((await restarted.list())[0].id, 'demo.code', 'install persists across app restarts');
+
+    const diskService = new ExtensionService({ root, target: 'win32-x64', json: service.json,
+      downloadFile: async (url, destination) => {
+        await fs.writeFile(destination, downloads.get(url));
+        return destination;
+      }
+    });
+    publish('demo.disk', { contributes: { snippets: [] } });
+    await diskService.install('demo.disk');
+    assert((await diskService.list()).some(item => item.id === 'demo.disk'), 'installs VSIX from disk');
+    assert(!(await fs.readdir(root)).some(name => name.startsWith('.install-')), 'downloaded archive is removed after installation');
+    publish('demo.disk', {}, [], '2.0.0');
+    downloads.set('https://packages.test/demo.disk', Buffer.from('broken zip'));
+    await assert.rejects(diskService.install('demo.disk'));
+    assert.equal((await diskService.list()).find(item => item.id === 'demo.disk').version, '1.0.0');
+    assert(!(await fs.readdir(root)).some(name => name.startsWith('.install-')), 'invalid disk archives are removed');
 
     publish('demo.web', { browser: './web.js' }, [['web.js', 'throw new Error("DO NOT RUN");']]);
     await service.install('demo.web');
@@ -141,13 +158,13 @@ async function main() {
     publish('anthropic.claude-code', { main: './extension.js' }, [[`resources/native-binary/${nativeName}`, 'fixture']]);
     await service.install('anthropic.claude-code');
     const claude = (await service.list()).find(item => item.id === 'anthropic.claude-code');
-    assert.equal(claude.launchActions[0].id, 'terminal');
+    assert.deepEqual(claude.launchActions.map(item => item.id), ['editor', 'terminal']);
     const launch = await service.launchInfo(claude.id, 'terminal');
     assert.equal(launch.trigger, 'extension-launch');
     assert(launch.agentCommand.includes(path.join(root, claude.id, 'resources', 'native-binary', nativeName)));
     await assert.rejects(service.launchInfo(claude.id, 'unknown'), /no supported/);
     await fs.unlink(path.join(root, claude.id, 'resources', 'native-binary', nativeName));
-    assert.equal((await service.list()).find(item => item.id === claude.id).launchActions, undefined);
+    assert.deepEqual((await service.list()).find(item => item.id === claude.id).launchActions.map(item => item.id), ['editor']);
     await assert.rejects(service.launchInfo(claude.id, 'terminal'), /no supported/);
     const before = (await service.list()).length;
     assert.throws(() => service.uninstall('../outside'), /Invalid extension/);

@@ -54,7 +54,7 @@ async function gitAction(action, filePath, message) {
 function normalizeExtension(item) {
   const ns = item.namespace || item.publisher || '';
   const name = item.name || item.extensionName || '';
-  return { id: item.namespace && item.name ? `${item.namespace}.${item.name}` : item.id || `${ns}.${name}`, name: item.displayName || name, publisher: ns, description: item.description || '', version: item.version || item.latestVersion || '', iconUrl: item.iconUrl || null, downloadCount: Number.isFinite(item.downloadCount) ? item.downloadCount : null, categories: item.categories || [], tags: item.tags || [], provider: 'open-vsx', installable: true, compatibilityMessage: 'Install this Open VSX package in Orion. Color themes and snippets are supported; executable features require a VS Code-compatible extension host that Orion does not yet provide.' };
+  return { id: item.namespace && item.name ? `${item.namespace}.${item.name}` : item.id || `${ns}.${name}`, name: item.displayName || name, publisher: ns, description: item.description || '', version: item.version || item.latestVersion || '', iconUrl: item.iconUrl || null, downloadCount: Number.isFinite(item.downloadCount) ? item.downloadCount : null, categories: item.categories || [], tags: item.tags || [], provider: 'open-vsx', installable: true, compatibilityMessage: 'Install from Open VSX, then use Open Extension Editor to run the package in the VSCodium editor. The first launch sets up the editor runtime. Themes and snippets also work in the built-in editor.' };
 }
 
 async function marketplaceSearch(query, offset = 0, size = 30) {

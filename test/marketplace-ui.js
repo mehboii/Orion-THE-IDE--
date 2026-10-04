@@ -9,7 +9,7 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
 (async () => {
   const { document } = parseHTML('<html><body><div class="sidebar-panel" data-panel="extensions"></div></body></html>');
   const panel = document.querySelector('.sidebar-panel');
-  let installed = false, version = '1.0.0', installWait, shouldFail = false, theme, launched, launchFail = false;
+  let installed = false, version = '1.0.0', installWait, shouldFail = false, theme, launched, launchFail = false, editorOpened, editorFail = false, progressListener, unsubscribed = 0, builtInSelected = false;
   const info = () => ({ id: 'demo.test', name: '<script>Demo</script>', publisher: 'demo', version, installed, installedVersion: installed ? '1.0.0' : undefined, description: '<img src=x onerror=alert(1)>', compatibilityMessage: 'Package can be installed.', runtimeMessage: installed ? 'Executable features need an extension host.' : undefined });
   const api = {
     searchMarketplace: async () => ({ results: [info()], total: 1, provider: 'Open VSX' }),
@@ -17,6 +17,9 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
     installExtension: async id => { assert.equal(id, 'demo.test'); if (installWait) await installWait.promise; if (shouldFail) throw new Error('Download failed.'); installed = true; },
     uninstallExtension: async id => { assert.equal(id, 'demo.test'); installed = false; },
     listExtensions: async () => installed ? [info()] : [],
+    openExtensionEditor: async id => { editorOpened = id; progressListener?.('Downloading editor runtime...'); if (editorFail) throw new Error('Runtime setup failed.'); return { opened: true }; },
+    useBuiltInEditor: async () => { builtInSelected = true; },
+    onExtensionEditorProgress: callback => { progressListener = callback; return () => { progressListener = null; unsubscribed++; }; },
     getExtensionContributions: async () => ({ themes: [{ extensionId: 'demo.test', id: 'demo.test:dark', label: 'Demo Dark' }] }),
     setExtensionTheme: async id => { theme = id; }
   };
@@ -24,6 +27,13 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/sidebar-panels.js'), 'utf8') + '\nglobalThis.SidebarPanels = SidebarPanels;', context);
   const sidebar = new context.SidebarPanels({ createPane: async options => { launched = options; return launchFail ? null : { status: 'running' }; } });
   sidebar.renderExtensions(); await tick();
+  await panel.querySelector('#marketplace-open-editor').onclick();
+  assert.equal(editorOpened, undefined, 'the full editor can open before an extension is installed');
+  assert.match(panel.querySelector('#extension-editor-state').textContent, /Extension Editor opened/);
+  assert.equal(unsubscribed, 1);
+  await panel.querySelector('#marketplace-builtin-editor').onclick();
+  assert.equal(builtInSelected, true);
+  assert.match(panel.querySelector('#extension-editor-state').textContent, /built-in editor/);
   assert(panel.querySelector('.extension-card'));
   assert.equal(panel.querySelector('script'), null);
   assert.equal(panel.querySelector('img'), null);
@@ -39,6 +49,17 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
   assert(panel.querySelector('#extension-uninstall'));
   assert.match(panel.querySelector('.compatibility-warning').textContent, /extension host/);
   assert.equal(panel.querySelector('[data-extension-launch]'), null, 'unsupported packages do not promise executable support');
+  api.getMarketplaceDetails = async () => ({ ...info(), launchActions: [{ id: 'editor', label: 'Open Extension Editor' }] });
+  await sidebar.showExtensionDetails('demo.test');
+  await panel.querySelector('[data-extension-launch]').onclick();
+  assert.equal(editorOpened, 'demo.test');
+  assert.equal(launched, undefined, 'editor action opens the real editor, not a terminal');
+  assert.match(panel.querySelector('#extension-operation-state').textContent, /Extension Editor opened/);
+  editorFail = true;
+  await panel.querySelector('[data-extension-launch]').onclick();
+  assert.match(panel.querySelector('#extension-operation-state').textContent, /Runtime setup failed/);
+  assert.equal(panel.querySelector('[data-extension-launch]').disabled, false, 'runtime failures are retryable');
+  editorFail = false;
   api.getMarketplaceDetails = async () => ({ ...info(), launchActions: [{ id: 'terminal', label: 'Run Claude Code in Terminal' }] });
   api.getExtensionLaunchInfo = async (id, action) => { assert.equal(id, 'demo.test'); assert.equal(action, 'terminal'); return { label: 'Claude Code', agentCommand: 'verified native executable', trigger: 'extension-launch' }; };
   await sidebar.showExtensionDetails('demo.test');

@@ -2,7 +2,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const yauzl = require('yauzl');
 const { parse } = require('jsonc-parser');
-const { requestJson, requestBuffer } = require('./marketplace-http');
+const { requestJson, requestFile } = require('./marketplace-http');
 
 function extensionId(value) {
   const id = String(value || '').toLowerCase();
@@ -24,8 +24,11 @@ function packagePath(root, name) {
   return target;
 }
 
-async function extractVsix(bytes, destination) {
-  const zip = await new Promise((resolve, reject) => yauzl.fromBuffer(bytes, { lazyEntries: true, validateEntrySizes: true, strictFileNames: true }, (error, result) => error ? reject(error) : resolve(result)));
+async function extractZip(bytes, destination, { prefix = '', maxExpandedBytes = 1024 * 1024 * 1024 } = {}) {
+  const zip = await new Promise((resolve, reject) => {
+    const open = Buffer.isBuffer(bytes) ? yauzl.fromBuffer : yauzl.open;
+    open(bytes, { lazyEntries: true, validateEntrySizes: true, strictFileNames: true }, (error, result) => error ? reject(error) : resolve(result));
+  });
   await fs.mkdir(destination, { recursive: true });
   return new Promise((resolve, reject) => {
     let count = 0, expanded = 0, failed = false;
@@ -35,11 +38,10 @@ async function extractVsix(bytes, destination) {
     zip.on('end', resolve);
     zip.on('entry', async entry => {
       try {
-        if (++count > 100000 || (expanded += entry.uncompressedSize) > 1024 * 1024 * 1024) throw new Error('Extension archive exceeds extraction limits.');
+        if (++count > 100000 || (expanded += entry.uncompressedSize) > maxExpandedBytes) throw new Error('Archive exceeds extraction limits.');
         if (((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw new Error('Extension archives cannot contain symbolic links.');
-        // VSIX metadata lives outside extension/. Only the package is installed.
-        if (!entry.fileName.startsWith('extension/') || entry.fileName.endsWith('/')) { zip.readEntry(); return; }
-        const name = entry.fileName.slice('extension/'.length);
+        if (!entry.fileName.startsWith(prefix) || entry.fileName.endsWith('/')) { zip.readEntry(); return; }
+        const name = entry.fileName.slice(prefix.length);
         const target = packagePath(destination, name);
         if (names.has(name.toLowerCase())) throw new Error('Extension archive contains duplicate file paths.');
         names.add(name.toLowerCase());
@@ -56,6 +58,11 @@ async function extractVsix(bytes, destination) {
   });
 }
 
+// VSIX metadata lives outside extension/. Only the package is installed.
+function extractVsix(bytes, destination) {
+  return extractZip(bytes, destination, { prefix: 'extension/' });
+}
+
 function installationInfo(manifest, installedAt) {
   const requiresHost = Boolean(manifest.main || manifest.browser);
   const supported = ['themes', 'snippets'];
@@ -64,19 +71,21 @@ function installationInfo(manifest, installedAt) {
     id: extensionId(`${manifest.publisher}.${manifest.name}`), name: manifest.displayName || manifest.name,
     publisher: manifest.publisher, version: manifest.version, description: manifest.description || '', installed: true,
     installedAt, requiresExtensionHost: requiresHost, unsupportedContributions: unsupported,
+    launchActions: [{ id: 'editor', label: 'Open Extension Editor' }],
     runtimeMessage: requiresHost
-      ? 'Package installed. Its executable features need a VS Code-compatible extension host, which Orion does not yet provide.'
+      ? 'Package installed. Open Extension Editor to run its executable features in the VSCodium editor. The first launch sets up the editor runtime.'
       : unsupported.length
-        ? `Package installed. Orion supports color themes and snippets; other contributions (${unsupported.join(', ')}) are not active.`
+        ? 'Package installed. Open Extension Editor to use all of its editor contributions. Color themes and snippets are also available in the built-in editor.'
         : 'Package installed. Color themes and snippets are available in the Orion editor.'
   };
 }
 
 class ExtensionService {
-  constructor({ root, json = requestJson, download = requestBuffer, target = platformTarget() }) {
+  constructor({ root, json = requestJson, download, downloadFile = requestFile, target = platformTarget() }) {
     this.root = path.resolve(root);
     this.json = json;
     this.download = download;
+    this.downloadFile = downloadFile;
     this.target = target;
     this.queue = Promise.resolve();
   }
@@ -101,8 +110,8 @@ class ExtensionService {
         if (extensionId(`${manifest.publisher}.${manifest.name}`) !== id) continue;
         const info = installationInfo(manifest, metadata.installedAt);
         if (await this.nativeExecutable(id)) {
-          info.launchActions = [{ id: 'terminal', label: 'Run Claude Code in Terminal' }];
-          info.runtimeMessage = 'Claude Code can run in an Orion terminal using its bundled CLI. Its VS Code panel features are not available.';
+          info.launchActions.push({ id: 'terminal', label: 'Run Claude Code in Terminal' });
+          info.runtimeMessage = 'Open Extension Editor to use Claude Code panels, or run its bundled CLI in an Orion terminal.';
         }
         installed.push(info);
       } catch (_) { /* An incomplete or externally modified package is not installed. */ }
@@ -127,7 +136,7 @@ class ExtensionService {
   async launchInfo(identifier, action) {
     const id = extensionId(identifier);
     const installed = (await this.list()).find(item => item.id === id);
-    if (!installed || action !== 'terminal' || !installed.launchActions?.length) throw new Error('This extension has no supported terminal launch action.');
+    if (!installed || action !== 'terminal' || !installed.launchActions?.some(item => item.id === 'terminal')) throw new Error('This extension has no supported terminal launch action.');
     const executable = await this.nativeExecutable(id);
     if (!executable) throw new Error('The bundled executable is missing. Reinstall this extension.');
     const agentCommand = process.platform === 'win32'
@@ -159,8 +168,14 @@ class ExtensionService {
         if (!details.files?.download) throw new Error('This extension has no downloadable VSIX package.');
         await fs.mkdir(this.root, { recursive: true });
         const stage = await fs.mkdtemp(path.join(this.root, '.install-'));
+        const archive = `${stage}.vsix`;
         try {
-          await extractVsix(await this.download(details.files.download), stage);
+          if (this.download) {
+            await extractVsix(await this.download(details.files.download), stage);
+          } else {
+            await this.downloadFile(details.files.download, archive);
+            await extractVsix(archive, stage);
+          }
           const manifest = JSON.parse(await fs.readFile(path.join(stage, 'package.json'), 'utf8'));
           if (extensionId(`${manifest.publisher}.${manifest.name}`) !== current || typeof manifest.version !== 'string' || !manifest.version) throw new Error('Downloaded package does not match the requested extension.');
           if (details.version && manifest.version !== details.version) throw new Error('Downloaded extension version does not match the registry.');
@@ -180,7 +195,10 @@ class ExtensionService {
           if (previous) await fs.rm(backup, { recursive: true, force: true });
           const info = installationInfo(manifest, installedAt);
           installed.set(current, info); changed.push(info);
-        } finally { await fs.rm(stage, { recursive: true, force: true }); }
+        } finally {
+          await fs.rm(archive, { force: true });
+          await fs.rm(stage, { recursive: true, force: true });
+        }
       };
       await installOne(id, true);
       return { extension: installed.get(id), installed: changed };
@@ -247,4 +265,4 @@ class ExtensionService {
   }
 }
 
-module.exports = { ExtensionService, extensionId, platformTarget, extractVsix, installationInfo };
+module.exports = { ExtensionService, extensionId, platformTarget, extractVsix, extractZip, installationInfo };
