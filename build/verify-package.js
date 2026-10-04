@@ -19,11 +19,16 @@ module.exports = async function verifyPackage(context) {
     throw new Error('Packaging rejected: extension installation flow is missing.');
   }
   for (const file of [
+    'main/update-service.js', 'main/update-client.js', 'main/update-config.js', 'config/update-keys.json',
     'main/extension-service.js', 'main/extension-editor.js', 'main/marketplace-http.js', 'renderer/editor-extensions.js',
     'node_modules/yauzl/index.js', 'node_modules/yauzl/crc32.js', 'node_modules/yauzl/fd-slicer.js',
     'node_modules/pend/index.js', 'node_modules/jsonc-parser/lib/umd/main.js'
   ]) {
     if (!read(file).length) throw new Error(`Packaging rejected: required file is empty: ${file}`);
+  }
+  const updateKeys = JSON.parse(read('config/update-keys.json'));
+  if (!Array.isArray(updateKeys.pinnedKeys) || /BEGIN (?:ENCRYPTED |RSA |EC )?PRIVATE KEY/.test(JSON.stringify(updateKeys))) {
+    throw new Error('Packaging rejected: invalid update public trust configuration or private signing material.');
   }
   if (!ui.includes('getExtensionLaunchInfo') || !read('preload/index.js').includes('getExtensionLaunchInfo') || !read('main/ipc-handlers.js').includes("'extensions:launch-info'")) {
     throw new Error('Packaging rejected: installed-extension terminal launch flow is missing.');

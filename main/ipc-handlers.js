@@ -11,9 +11,16 @@ const projectRoot = require('./project-root');
 const gitService = require('./git-service');
 const developmentServices = require('./development-services');
 const { UpdateService } = require('./update-service');
+const Store = require('electron-store');
 
 function registerIpcHandlers({ openEditorFile, updateService: customUpdateService } = {}) {
+  let updatePreferences = null;
+  if (!customUpdateService) {
+    try { updatePreferences = new Store({ name: 'updates', defaults: { channel: 'stable', lastCheckAt: 0 } }); }
+    catch (_) { console.warn('[Updates] Preferences unavailable; continuing without update scheduling persistence.'); }
+  }
   const updateService = customUpdateService || new UpdateService({
+    preferences: updatePreferences,
     onStatusChanged: (status) => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send('updater:status-changed', status);
@@ -26,7 +33,8 @@ function registerIpcHandlers({ openEditorFile, updateService: customUpdateServic
     }
   });
 
-  ipcMain.handle('updater:check-for-updates', (_event, options) => updateService.checkForUpdates(options));
+  // The application owns update identity and target, never the renderer.
+  ipcMain.handle('updater:check-for-updates', () => updateService.checkForUpdates());
   ipcMain.handle('updater:download-update', () => updateService.downloadUpdate());
   ipcMain.handle('updater:get-status', () => updateService.getStatus());
   ipcMain.handle('updater:install-update', () => updateService.installUpdate());
@@ -485,6 +493,7 @@ function registerIpcHandlers({ openEditorFile, updateService: customUpdateServic
   });
   ipcMain.handle('runner:stop', (event, runId) => runner.stop(runId));
   ipcMain.handle('runner:debug-command', (event, { runId, command }) => runner.sendDebugCommand(runId, command));
+  return updateService;
 }
 
 module.exports = { registerIpcHandlers };

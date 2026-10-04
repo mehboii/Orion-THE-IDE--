@@ -123,6 +123,65 @@ npm run rebuild
 
 ## Running the App
 
+### N11X update checks
+
+Orion checks the N11X Update Service in the background, three seconds after its
+main window loads. Startup attempts are limited to once per 24 hours, including
+failed attempts. The channel and last-attempt time use the existing
+`electron-store` dependency in the `updates` preferences store. The default
+channel is `stable`. Settings → Orion Updates, Help → Check for Updates, and
+the command palette allow manual checks at any time.
+
+The backend origin is centralized in `main/update-config.js`: currently
+`http://127.0.0.1:8091`. `N11X_UPDATE_URL` overrides the origin. HTTP is accepted
+only on loopback; other origins require HTTPS. The production URL
+`https://updates.n11x.dev` is a placeholder and is not enabled.
+
+The implementation was checked against the actual source and documentation at
+`/home/madbo1/n11x-update-service`, specifically `src/server/http.mjs`,
+`src/services/catalog.mjs`, `src/release/schema.mjs`, `src/security/signing.mjs`,
+`docs/api.md`, and `docs/signing.md`. It requests
+`GET /v1/orion/latest?channel=stable&platform=windows&architecture=x64&currentVersion=<app.getVersion()>`
+on Windows x64. The runtime supplies the platform and architecture; supported
+Orion targets are Windows/Linux x64 and macOS x64/arm64. No workspace or user
+content, credentials, or telemetry are sent.
+
+Every release decision with a latest version requires a schema-valid manifest
+and all Ed25519 signatures verified against pinned public keys. Equal/older
+latest responses omit a manifest, so Orion retrieves the original through
+`GET /v1/orion/releases/{version}?channel={channel}` before reporting up to date.
+It uses the exact N11X UTF-8 array signing encodings and SHA-256 SPKI key IDs.
+The selected artifact must match the signed platform/architecture and the
+expected same-origin download route. Downloading is manual, streamed, and
+checked against the signed size and SHA-256. **Show Download** reveals the
+verified file; Orion does not execute an installer.
+
+Production trust belongs in `config/update-keys.json` (`pinnedKeys`, public PEM
+strings). It remains empty pending an independently authorized production key.
+No key is trusted from an API response. Development overrides
+`N11X_UPDATE_PUBLIC_KEY` (public PEM) and `N11X_UPDATE_PUBLIC_KEYS_PATH` (JSON array
+of public PEM strings) work only for unpackaged Orion using a loopback backend;
+packaged applications ignore these overrides. Never supply a private key.
+
+`npm run test:updater` runs signature/validation/network tests, renderer tests,
+and the actual Electron application with disposable fixtures. These fixtures
+do not establish real-backend success. `npm run test:updater:live` launches the
+actual Orion application against port 8091, records its startup and manual
+request identity/response status, and verifies the displayed result. It reports
+full success only after processing a real signed manifest. A real
+`404 {"error":"release_not_found"}` shows **No Update Published** and the live
+test deliberately exits unsuccessfully (Node exit code 2) because signed-release
+end-to-end verification is still blocked.
+
+During local verification, a temporary SSH forward bound only to Windows
+`127.0.0.1:8091` connected to the existing service on the home server's loopback
+port. No server files, public networking, or production signing settings were
+changed. Both real startup and manual requests received `release_not_found`;
+the real stable catalog returned an empty release list. A release maintainer
+must publish a signed Orion artifact for the target and independently supply
+its verification public key before the successful real-manifest path can be
+verified. Production exposure and installer execution remain separate work.
+
 ```bash
 # Start Electron application locally
 npm start

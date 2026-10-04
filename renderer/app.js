@@ -1717,6 +1717,7 @@ class AppController {
     this.modalUpdateClose?.addEventListener('click', () => this.hideUpdateModal());
     this.btnUpdateCancel?.addEventListener('click', () => this.hideUpdateModal());
     this.btnUpdateAction?.addEventListener('click', () => this.triggerUpdateAction());
+    document.getElementById('btn-check-updates')?.addEventListener('click', () => this.checkForUpdates());
 
     window.electronAPI.updater.onStatusChanged((status) => this.handleUpdateStatusChanged(status));
     window.electronAPI.updater.onDownloadProgress((progress) => this.handleUpdateDownloadProgress(progress));
@@ -1741,6 +1742,17 @@ class AppController {
 
   handleUpdateStatusChanged(status) {
     this.updateState = status;
+    const descriptions = { idle: 'Updates have not been checked.', checking: 'Checking for updates...',
+      'not-available': "You're up to date", 'no-release': 'No update has been published for this platform.',
+      available: `Orion ${status.latestVersion} is available.`, error: 'Unable to check for updates',
+      downloading: 'Downloading update...', downloaded: 'Update downloaded and verified.' };
+    const stateLabel = document.getElementById('settings-update-state');
+    if (stateLabel) stateLabel.textContent = descriptions[status.status] || '';
+    const versionLabel = document.getElementById('settings-update-version');
+    if (versionLabel && status.currentVersion) versionLabel.textContent = `Installed Orion version: ${status.currentVersion}`;
+    const checkButton = document.getElementById('btn-check-updates');
+    if (checkButton) checkButton.disabled = ['checking', 'downloading'].includes(status.status);
+    if (this.modalUpdate && !this.modalUpdate.classList.contains('hidden')) this.showUpdateModal(status);
     if (!this.statusUpdate) return;
     if (status.updateAvailable) {
       this.statusUpdate.classList.remove('hidden');
@@ -1778,29 +1790,36 @@ class AppController {
     }
 
     if (info.status === 'error') {
-      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Update Check Failed';
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Unable to check for updates';
       if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = `<p style="color: #f14c4c;">Error: ${this.escapeHtml(info.error || 'Failed to check for updates.')}</p>`;
       if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
       if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Close';
       return;
     }
 
-    if (info.status === 'not-available' || !info.updateAvailable) {
+    if (info.status === 'no-release') {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'No Update Published';
+      if (this.updateInfoContainer) this.updateInfoContainer.textContent = 'No Orion release is published for this channel, platform and architecture yet.';
+      this.btnUpdateAction?.classList.add('hidden');
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Close';
+      return;
+    }
+    if (info.status === 'not-available') {
       if (this.updateModalTitle) this.updateModalTitle.textContent = 'Orion is Up to Date';
-      if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = `<p>You are running the latest version of Orion IDE (<strong>v${this.escapeHtml(info.currentVersion || '13.0.1')}</strong>).</p>`;
+      if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = `<p>You're up to date. Installed Orion version: <strong>${this.escapeHtml(info.currentVersion)}</strong>.</p>`;
       if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
       if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Close';
       return;
     }
 
     if (info.status === 'downloaded') {
-      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Update Ready to Install';
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Update Downloaded';
       if (this.updateInfoContainer) {
         this.updateInfoContainer.innerHTML = `<p>Orion <strong>v${this.escapeHtml(info.latestVersion)}</strong> has been downloaded and verified.</p><p style="font-size: 12px; color: #888;">Package saved at: <code>${this.escapeHtml(info.downloadedFile || '')}</code></p>`;
       }
       if (this.btnUpdateAction) {
         this.btnUpdateAction.classList.remove('hidden');
-        this.btnUpdateAction.textContent = 'Install Update';
+        this.btnUpdateAction.textContent = 'Show Download';
       }
       if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Later';
       return;

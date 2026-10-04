@@ -9,6 +9,8 @@ const runner = require('./runner');
 const { registerIpcHandlers } = require('./ipc-handlers');
 
 let mainWindow = null;
+let updateService = null;
+let startupUpdateScheduled = false;
 let editorWindow = null;
 let pendingEditorFiles = [];
 let editorReady = false;
@@ -190,6 +192,16 @@ function createWindow() {
   showBuildVersion(mainWindow, 'ORION IDE');
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (startupUpdateScheduled) return;
+    startupUpdateScheduled = true;
+    // The window is already available. Never await networking during launch.
+    const timer = setTimeout(() => {
+      updateService?.checkAtStartup().catch(() => console.warn('[Updates] Startup check failed.'));
+    }, 3000);
+    timer.unref();
+    app.once('before-quit', () => clearTimeout(timer));
+  });
   // Keep automated window counts meaningful; opt in to a detached inspector
   // separately when diagnosing a test run.
   if (process.env.IDE_TEST_DEVTOOLS) mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -328,7 +340,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  registerIpcHandlers({ openEditorFile });
+  updateService = registerIpcHandlers({ openEditorFile });
   registerWindowControlHandlers();
   createWindow();
 
