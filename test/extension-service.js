@@ -136,6 +136,19 @@ async function main() {
     }
     await fs.rm(failedStage, { recursive: true, force: true });
     assert(!(await fs.readdir(root)).some(name => name.startsWith('.install-')), 'failed installs clean staging files');
+    await assert.rejects(service.launchInfo('demo.code', 'terminal'), /no supported/);
+    const nativeName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+    publish('anthropic.claude-code', { main: './extension.js' }, [[`resources/native-binary/${nativeName}`, 'fixture']]);
+    await service.install('anthropic.claude-code');
+    const claude = (await service.list()).find(item => item.id === 'anthropic.claude-code');
+    assert.equal(claude.launchActions[0].id, 'terminal');
+    const launch = await service.launchInfo(claude.id, 'terminal');
+    assert.equal(launch.trigger, 'extension-launch');
+    assert(launch.agentCommand.includes(path.join(root, claude.id, 'resources', 'native-binary', nativeName)));
+    await assert.rejects(service.launchInfo(claude.id, 'unknown'), /no supported/);
+    await fs.unlink(path.join(root, claude.id, 'resources', 'native-binary', nativeName));
+    assert.equal((await service.list()).find(item => item.id === claude.id).launchActions, undefined);
+    await assert.rejects(service.launchInfo(claude.id, 'terminal'), /no supported/);
     const before = (await service.list()).length;
     assert.throws(() => service.uninstall('../outside'), /Invalid extension/);
     assert.equal((await service.list()).length, before);

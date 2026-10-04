@@ -95,13 +95,14 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     const installed = (await extensions.list()).find(item => item.id === String(identifier).toLowerCase());
     try {
       const details = await developmentServices.marketplaceDetails(identifier);
-      return { ...details, installed: Boolean(installed), installedVersion: installed?.version, runtimeMessage: installed?.runtimeMessage };
+      return { ...details, installed: Boolean(installed), installedVersion: installed?.version, runtimeMessage: installed?.runtimeMessage, launchActions: installed?.launchActions };
     } catch (error) {
       if (installed) return { ...installed, installedVersion: installed.version, compatibilityMessage: installed.runtimeMessage };
       throw error;
     }
   });
   ipcMain.handle('extensions:list', () => extensions.list());
+  ipcMain.handle('extensions:launch-info', (_event, identifier, action) => extensions.launchInfo(identifier, action));
   ipcMain.handle('extensions:install', async (_event, identifier) => {
     try { return await extensions.install(identifier); }
     finally { broadcastExtensions(); }

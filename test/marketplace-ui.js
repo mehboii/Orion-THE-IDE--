@@ -9,7 +9,7 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
 (async () => {
   const { document } = parseHTML('<html><body><div class="sidebar-panel" data-panel="extensions"></div></body></html>');
   const panel = document.querySelector('.sidebar-panel');
-  let installed = false, version = '1.0.0', installWait, shouldFail = false, theme;
+  let installed = false, version = '1.0.0', installWait, shouldFail = false, theme, launched, launchFail = false;
   const info = () => ({ id: 'demo.test', name: '<script>Demo</script>', publisher: 'demo', version, installed, installedVersion: installed ? '1.0.0' : undefined, description: '<img src=x onerror=alert(1)>', compatibilityMessage: 'Package can be installed.', runtimeMessage: installed ? 'Executable features need an extension host.' : undefined });
   const api = {
     searchMarketplace: async () => ({ results: [info()], total: 1, provider: 'Open VSX' }),
@@ -22,7 +22,7 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
   };
   const context = vm.createContext({ document, window: { electronAPI: api }, console, clearTimeout, setTimeout });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/sidebar-panels.js'), 'utf8') + '\nglobalThis.SidebarPanels = SidebarPanels;', context);
-  const sidebar = new context.SidebarPanels({});
+  const sidebar = new context.SidebarPanels({ createPane: async options => { launched = options; return launchFail ? null : { status: 'running' }; } });
   sidebar.renderExtensions(); await tick();
   assert(panel.querySelector('.extension-card'));
   assert.equal(panel.querySelector('script'), null);
@@ -38,6 +38,19 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
   assert.equal(panel.querySelector('#extension-install'), null);
   assert(panel.querySelector('#extension-uninstall'));
   assert.match(panel.querySelector('.compatibility-warning').textContent, /extension host/);
+  assert.equal(panel.querySelector('[data-extension-launch]'), null, 'unsupported packages do not promise executable support');
+  api.getMarketplaceDetails = async () => ({ ...info(), launchActions: [{ id: 'terminal', label: 'Run Claude Code in Terminal' }] });
+  api.getExtensionLaunchInfo = async (id, action) => { assert.equal(id, 'demo.test'); assert.equal(action, 'terminal'); return { label: 'Claude Code', agentCommand: 'verified native executable', trigger: 'extension-launch' }; };
+  await sidebar.showExtensionDetails('demo.test');
+  await panel.querySelector('[data-extension-launch]').onclick();
+  assert.equal(launched.agentCommand, 'verified native executable');
+  assert.match(panel.querySelector('#extension-operation-state').textContent, /Started in a terminal/);
+  launchFail = true;
+  await panel.querySelector('[data-extension-launch]').onclick();
+  assert.match(panel.querySelector('#extension-operation-state').textContent, /Unable to start/);
+  assert.equal(panel.querySelector('[data-extension-launch]').disabled, false);
+  launchFail = false;
+  api.getMarketplaceDetails = async () => info();
   await panel.querySelector('[data-theme-index]').onclick();
   assert.equal(theme, 'demo.test:dark');
   await panel.querySelector('#extension-theme-reset').onclick();

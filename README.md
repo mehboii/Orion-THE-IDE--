@@ -28,6 +28,12 @@ grammars, debuggers, custom views, and other VS Code API contributions require
 a compatible extension host/workbench integration that is not yet implemented.
 The marketplace shows this distinction instead of marking these packages active.
 
+Claude Code (`anthropic.claude-code`) also supports **Run Claude Code in Terminal**
+in its installed-extension details. This starts the package's bundled native CLI
+in a new Orion terminal in the opened project. Follow Claude's setup and sign-in
+instructions there. It does not activate the extension's VS Code panel. Other
+executable extensions still require a compatible extension host.
+
 Run `npm run test:extensions` for the installation and renderer tests. Run
 `node test/extension-marketplace-live.js` to verify real registry downloads in
 a temporary directory. `node test/verify_extensions.js` verifies installation,
@@ -46,6 +52,12 @@ with isolated application data.
 ---
 
 ## Prerequisites & Installation
+
+The Windows installer upgrades the system installation in Program Files. After
+installing version 13, launch **ORION IDE 13** and confirm the window title shows
+**v13.0.1**. The app keeps its existing application data location. Builds validate
+the packaged marketplace code and reject the obsolete blocked-install UI before
+creating an installer.
 
 ### 1. Prerequisites
 - **Node.js**: Version 18 or 20+

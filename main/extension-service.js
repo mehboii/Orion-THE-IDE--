@@ -99,10 +99,41 @@ class ExtensionService {
         const manifest = JSON.parse(await fs.readFile(path.join(this.root, id, 'package.json'), 'utf8'));
         const metadata = JSON.parse(await fs.readFile(path.join(this.root, id, '.orion-install.json'), 'utf8'));
         if (extensionId(`${manifest.publisher}.${manifest.name}`) !== id) continue;
-        installed.push(installationInfo(manifest, metadata.installedAt));
+        const info = installationInfo(manifest, metadata.installedAt);
+        if (await this.nativeExecutable(id)) {
+          info.launchActions = [{ id: 'terminal', label: 'Run Claude Code in Terminal' }];
+          info.runtimeMessage = 'Claude Code can run in an Orion terminal using its bundled CLI. Its VS Code panel features are not available.';
+        }
+        installed.push(info);
       } catch (_) { /* An incomplete or externally modified package is not installed. */ }
     }
     return installed.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async nativeExecutable(identifier) {
+    const id = extensionId(identifier);
+    // A bundled CLI is a supported terminal integration, not a VS Code API host.
+    if (id !== 'anthropic.claude-code') return null;
+    const directory = path.join(this.root, id);
+    const executable = path.join(directory, 'resources', 'native-binary', process.platform === 'win32' ? 'claude.exe' : 'claude');
+    try {
+      const resolved = await fs.realpath(executable);
+      const relative = path.relative(await fs.realpath(directory), resolved);
+      if (relative.startsWith('..') || path.isAbsolute(relative) || !(await fs.stat(resolved)).isFile()) return null;
+      return resolved;
+    } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
+
+  async launchInfo(identifier, action) {
+    const id = extensionId(identifier);
+    const installed = (await this.list()).find(item => item.id === id);
+    if (!installed || action !== 'terminal' || !installed.launchActions?.length) throw new Error('This extension has no supported terminal launch action.');
+    const executable = await this.nativeExecutable(id);
+    if (!executable) throw new Error('The bundled executable is missing. Reinstall this extension.');
+    const agentCommand = process.platform === 'win32'
+      ? `& '${executable.replace(/'/g, "''")}'`
+      : `'${executable.replace(/'/g, "'\\''")}'`;
+    return { label: 'Claude Code', agentId: 'shell', agentCommand, trigger: 'extension-launch' };
   }
 
   install(identifier) {

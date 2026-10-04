@@ -85,9 +85,27 @@ class SidebarPanels {
       const update = x.installed && x.installedVersion !== x.version;
       panel.innerHTML = `<div class="panel-pad extension-detail"><button class="icon-text-btn" id="extension-back">← Back to results</button><h2>${this.escape(x.name)}</h2><p class="panel-muted">${this.escape(x.publisher)} · ${this.escape(x.version || 'version unavailable')}${x.installed ? ` · Installed ${this.escape(x.installedVersion)}` : ''}</p><p>${this.escape(x.description)}</p><div class="compatibility-warning">${this.escape(x.runtimeMessage || x.compatibilityMessage)}</div>${!x.installed || update ? `<button id="extension-install" class="btn btn-primary">${update ? 'Update' : 'Install'}</button>` : ''}${x.installed ? '<button id="extension-uninstall" class="btn btn-secondary">Uninstall</button>' : ''}<div id="extension-theme-actions"></div><p id="extension-operation-state" class="panel-muted" role="status"></p></div>`;
       panel.querySelector('#extension-back').onclick = back;
+      if (x.installed) {
+        const launchActions = x.launchActions || [];
+        const container = document.createElement('div');
+        container.innerHTML = launchActions.map((action, index) => `<button class="btn btn-primary" data-extension-launch="${index}">${this.escape(action.label)}</button>`).join('');
+        panel.querySelector('#extension-theme-actions').before(container);
+        container.querySelectorAll('[data-extension-launch]').forEach(button => button.onclick = async () => {
+          const state = panel.querySelector('#extension-operation-state');
+          button.disabled = true;
+          state.textContent = 'Starting extension in a terminal...';
+          try {
+            const options = await window.electronAPI.getExtensionLaunchInfo(id, launchActions[Number(button.dataset.extensionLaunch)].id);
+            const pane = await this.app.createPane(options);
+            if (!pane || pane.status === 'exited') throw new Error('Unable to start the extension. Check the terminal, or close a pane if all terminal slots are occupied.');
+            if (request === this.marketRequest) state.textContent = 'Started in a terminal. Follow its setup or sign-in instructions there.';
+          } catch (error) { if (request === this.marketRequest) state.textContent = error.message; }
+          finally { button.disabled = false; }
+        });
+      }
       const operate = async action => {
         const state = panel.querySelector('#extension-operation-state');
-        const buttons = [...panel.querySelectorAll('#extension-install, #extension-uninstall')];
+        const buttons = [...panel.querySelectorAll('#extension-install, #extension-uninstall, [data-extension-launch]')];
         buttons.forEach(button => button.disabled = true);
         state.textContent = action === 'install' ? 'Downloading and installing extension and dependencies…' : 'Uninstalling extension…';
         try {
