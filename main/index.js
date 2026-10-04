@@ -296,6 +296,17 @@ function createWindow() {
       label: 'Help',
       submenu: [
         {
+          label: 'Check for Updates...',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.executeJavaScript(
+                'window.appInstance && window.appInstance.checkForUpdates && window.appInstance.checkForUpdates()'
+              );
+            }
+          }
+        },
+        { type: 'separator' },
+        {
           label: 'Keyboard Shortcuts',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {

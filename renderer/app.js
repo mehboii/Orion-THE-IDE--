@@ -83,6 +83,19 @@ class AppController {
     this.commandPaletteList = document.getElementById('command-palette-list');
     this.menubarDropdown = document.getElementById('menubar-dropdown');
 
+    this.statusUpdate = document.getElementById('status-update');
+    this.statusUpdateText = document.getElementById('status-update-text');
+    this.modalUpdate = document.getElementById('modal-update');
+    this.modalUpdateClose = document.getElementById('modal-update-close');
+    this.updateModalTitle = document.getElementById('update-modal-title');
+    this.updateInfoContainer = document.getElementById('update-info-container');
+    this.updateProgressContainer = document.getElementById('update-progress-container');
+    this.updateProgressFill = document.getElementById('update-progress-fill');
+    this.updateProgressText = document.getElementById('update-progress-text');
+    this.btnUpdateCancel = document.getElementById('btn-update-cancel');
+    this.btnUpdateAction = document.getElementById('btn-update-action');
+    this.updateState = null;
+
     this.fileExplorer = null;
     this.sidebarPanels = null;
     this.gitStatus = null;
@@ -107,6 +120,7 @@ class AppController {
     this.setupSidebarResize();
     this.setupCommandPalette();
     this.setupOrionMenubar();
+    this.setupUpdateListeners();
     this.sidebarPanels = new SidebarPanels(this);
     const savedWidth = Number(localStorage.getItem('orion.sidebar.width'));
     if (savedWidth >= 160 && savedWidth <= 480) {
@@ -1360,6 +1374,7 @@ class AppController {
       { id: 'terminal.close', label: 'Terminal: Kill Focused Terminal', accel: 'Ctrl+Shift+W', enabled: () => !!this.focusedPaneId, run: () => this.focusedPaneId && this.removePane(this.focusedPaneId) },
       { id: 'terminal.broadcast', label: 'Terminal: Toggle Broadcast Mode', accel: 'Ctrl+Shift+B', run: () => window.broadcastManager.toggle() },
       { id: 'terminal.killAll', label: 'Terminal: Kill All Terminals', accel: 'Ctrl+Shift+K', enabled: () => this.panes.size > 0, run: () => this.killAllSessions() },
+      { id: 'help.updates', label: 'Help: Check for Updates…', run: () => this.checkForUpdates() },
       { id: 'help.shortcuts', label: 'Help: Keyboard Shortcuts', run: () => this.modalHelp.classList.remove('hidden') },
       { id: 'help.tmux', label: 'Help: Recheck tmux Connection', run: () => this.checkTmux() }
     ].map((command) => ({ ...command, enabled: enabled(command.enabled) }));
@@ -1379,7 +1394,7 @@ class AppController {
       view: ['view.commandCenter', 'view.sidebar', 'view.panel', 'view.fullScreen', 'view.grid23', 'view.grid32'],
       go: ['go.back', 'go.forward', 'go.nextTerminal'], run: ['run.start', 'run.stop'],
       terminal: ['terminal.new', 'terminal.close', 'terminal.broadcast', 'terminal.killAll'],
-      help: ['help.shortcuts', 'help.tmux']
+      help: ['help.updates', 'help.shortcuts', 'help.tmux']
     };
     document.querySelectorAll('.menubar-item').forEach((button) => button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -1686,6 +1701,170 @@ class AppController {
 
     // Keep broadcast status in sync
     if (window.broadcastManager) window.broadcastManager.updateUI();
+  }
+
+  setupUpdateListeners() {
+    if (!window.electronAPI?.updater) return;
+
+    this.statusUpdate?.addEventListener('click', () => {
+      if (this.updateState?.updateAvailable) {
+        this.showUpdateModal(this.updateState);
+      } else {
+        this.checkForUpdates();
+      }
+    });
+
+    this.modalUpdateClose?.addEventListener('click', () => this.hideUpdateModal());
+    this.btnUpdateCancel?.addEventListener('click', () => this.hideUpdateModal());
+    this.btnUpdateAction?.addEventListener('click', () => this.triggerUpdateAction());
+
+    window.electronAPI.updater.onStatusChanged((status) => this.handleUpdateStatusChanged(status));
+    window.electronAPI.updater.onDownloadProgress((progress) => this.handleUpdateDownloadProgress(progress));
+
+    // Initial silent status check
+    window.electronAPI.updater.getStatus().then((status) => {
+      if (status) this.handleUpdateStatusChanged(status);
+    }).catch(() => {});
+  }
+
+  async checkForUpdates() {
+    if (!window.electronAPI?.updater) return;
+    this.showUpdateModal({ status: 'checking' });
+    try {
+      const res = await window.electronAPI.updater.checkForUpdates();
+      this.handleUpdateStatusChanged(res);
+      this.showUpdateModal(res);
+    } catch (err) {
+      this.showUpdateModal({ status: 'error', error: err.message });
+    }
+  }
+
+  handleUpdateStatusChanged(status) {
+    this.updateState = status;
+    if (!this.statusUpdate) return;
+    if (status.updateAvailable) {
+      this.statusUpdate.classList.remove('hidden');
+      if (this.statusUpdateText) {
+        this.statusUpdateText.textContent = `Update v${status.latestVersion}`;
+      }
+      this.statusUpdate.title = `Orion update v${status.latestVersion} available. Click to review.`;
+    } else {
+      this.statusUpdate.classList.add('hidden');
+    }
+  }
+
+  handleUpdateDownloadProgress(progress) {
+    if (this.updateProgressFill) {
+      this.updateProgressFill.style.width = `${progress.percent}%`;
+    }
+    if (this.updateProgressText) {
+      const mbTransferred = (progress.transferred / (1024 * 1024)).toFixed(1);
+      const mbTotal = (progress.total / (1024 * 1024)).toFixed(1);
+      this.updateProgressText.textContent = `${progress.percent}% (${mbTransferred} MB / ${mbTotal} MB)`;
+    }
+  }
+
+  showUpdateModal(info = {}) {
+    if (!this.modalUpdate) return;
+    this.modalUpdate.classList.remove('hidden');
+    this.updateProgressContainer?.classList.add('hidden');
+
+    if (info.status === 'checking') {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Checking for Updates';
+      if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = '<p>Contacting N11X Update Service…</p>';
+      if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Cancel';
+      return;
+    }
+
+    if (info.status === 'error') {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Update Check Failed';
+      if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = `<p style="color: #f14c4c;">Error: ${this.escapeHtml(info.error || 'Failed to check for updates.')}</p>`;
+      if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Close';
+      return;
+    }
+
+    if (info.status === 'not-available' || !info.updateAvailable) {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Orion is Up to Date';
+      if (this.updateInfoContainer) this.updateInfoContainer.innerHTML = `<p>You are running the latest version of Orion IDE (<strong>v${this.escapeHtml(info.currentVersion || '13.0.1')}</strong>).</p>`;
+      if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Close';
+      return;
+    }
+
+    if (info.status === 'downloaded') {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Update Ready to Install';
+      if (this.updateInfoContainer) {
+        this.updateInfoContainer.innerHTML = `<p>Orion <strong>v${this.escapeHtml(info.latestVersion)}</strong> has been downloaded and verified.</p><p style="font-size: 12px; color: #888;">Package saved at: <code>${this.escapeHtml(info.downloadedFile || '')}</code></p>`;
+      }
+      if (this.btnUpdateAction) {
+        this.btnUpdateAction.classList.remove('hidden');
+        this.btnUpdateAction.textContent = 'Install Update';
+      }
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Later';
+      return;
+    }
+
+    if (info.status === 'downloading') {
+      if (this.updateModalTitle) this.updateModalTitle.textContent = 'Downloading Update…';
+      this.updateProgressContainer?.classList.remove('hidden');
+      if (this.btnUpdateAction) this.btnUpdateAction.classList.add('hidden');
+      if (this.btnUpdateCancel) this.btnUpdateCancel.textContent = 'Background';
+      return;
+    }
+
+    // Available state
+    if (this.updateModalTitle) this.updateModalTitle.textContent = `Orion Update Available: v${info.latestVersion}`;
+    const notesHtml = Array.isArray(info.releaseNotes) && info.releaseNotes.length > 0
+      ? `<ul style="margin: 8px 0 12px 18px; font-size: 13px;">${info.releaseNotes.map(n => `<li>${this.escapeHtml(n)}</li>`).join('')}</ul>`
+      : '<p style="color: #888;">No release notes provided.</p>';
+    const mandatoryHtml = info.mandatory
+      ? '<p style="color: #cca700; font-weight: bold; margin-bottom: 8px;">⚠ This is a mandatory update.</p>'
+      : '';
+
+    if (this.updateInfoContainer) {
+      this.updateInfoContainer.innerHTML = `
+        ${mandatoryHtml}
+        <p>A new version of Orion IDE is available (current: v${this.escapeHtml(info.currentVersion)}, latest: v${this.escapeHtml(info.latestVersion)}).</p>
+        <div style="margin-top: 10px;">
+          <strong>Release Notes:</strong>
+          ${notesHtml}
+        </div>
+      `;
+    }
+    if (this.btnUpdateAction) {
+      this.btnUpdateAction.classList.remove('hidden');
+      this.btnUpdateAction.textContent = 'Download Update';
+    }
+    if (this.btnUpdateCancel) {
+      this.btnUpdateCancel.textContent = info.mandatory ? 'Close' : 'Later';
+    }
+  }
+
+  hideUpdateModal() {
+    this.modalUpdate?.classList.add('hidden');
+  }
+
+  async triggerUpdateAction() {
+    if (!this.updateState) return;
+    if (this.updateState.status === 'downloaded') {
+      try {
+        await window.electronAPI.updater.installUpdate();
+        this.hideUpdateModal();
+      } catch (err) {
+        alert(`Failed to start installer: ${err.message}`);
+      }
+      return;
+    }
+    if (this.updateState.status === 'available') {
+      this.showUpdateModal({ ...this.updateState, status: 'downloading' });
+      try {
+        await window.electronAPI.updater.downloadUpdate();
+      } catch (err) {
+        this.showUpdateModal({ status: 'error', error: err.message });
+      }
+    }
   }
 
   escapeHtml(str) {

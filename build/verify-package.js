@@ -19,7 +19,7 @@ module.exports = async function verifyPackage(context) {
     throw new Error('Packaging rejected: extension installation flow is missing.');
   }
   for (const file of [
-    'main/extension-service.js', 'main/marketplace-http.js', 'renderer/editor-extensions.js',
+    'main/extension-service.js', 'main/extension-editor.js', 'main/marketplace-http.js', 'renderer/editor-extensions.js',
     'node_modules/yauzl/index.js', 'node_modules/yauzl/crc32.js', 'node_modules/yauzl/fd-slicer.js',
     'node_modules/pend/index.js', 'node_modules/jsonc-parser/lib/umd/main.js'
   ]) {
@@ -27,6 +27,9 @@ module.exports = async function verifyPackage(context) {
   }
   if (!ui.includes('getExtensionLaunchInfo') || !read('preload/index.js').includes('getExtensionLaunchInfo') || !read('main/ipc-handlers.js').includes("'extensions:launch-info'")) {
     throw new Error('Packaging rejected: installed-extension terminal launch flow is missing.');
+  }
+  if (!ui.includes('openExtensionEditor') || !read('preload/index.js').includes('openExtensionEditor') || !read('main/ipc-handlers.js').includes("'extensions:open-editor'")) {
+    throw new Error('Packaging rejected: executable-extension editor flow is missing.');
   }
   console.log(`  Verified packaged Orion ${metadata.version}: marketplace Install enabled and dependencies included.`);
 };

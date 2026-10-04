@@ -20,25 +20,45 @@ directory under Electron's application data directory. Installation selects a
 matching platform package when available, installs dependencies and pack members,
 and exposes installed versions, updates, and uninstall in the existing sidebar.
 
-Installing a package does **not** mean all its features are active. Orion's
-current editor supports JSON color themes (editor colors and approximate token
-color mapping) and snippets. Select **Use [theme name]** in an installed theme's
-details to apply it to the editor. Executable extensions, custom language
-grammars, debuggers, custom views, and other VS Code API contributions require
-a compatible extension host/workbench integration that is not yet implemented.
-The marketplace shows this distinction instead of marking these packages active.
+Use **Open Extension Editor** in the Extensions sidebar or an installed package's
+details to run extensions in a separate VSCodium editor window. This provides the
+VS Code workbench and extension host for executable extensions, language tools,
+debuggers, and extension panels. Orion loads its installed packages and current
+workspace there. Extensions activate according to their own file, command, and
+view triggers. Individual packages can still require credentials, external tools,
+particular API versions, or proprietary services; this does not guarantee that
+every marketplace package will work.
+
+On Windows x64/arm64, the first launch downloads the official VSCodium ZIP and
+verifies its SHA-256 checksum before extraction. An existing standard VSCodium
+installation is reused when available. On macOS/Linux, install VSCodium in its
+standard location first. Runtime files, editor settings, and the synchronized
+extension directory live under `extension-editor` in Orion's application data;
+your personal editor profile is not modified.
+
+After opening Extension Editor, file opens from Orion use that editor. Use
+**Use Built-in Editor** to switch back; existing windows remain open. After
+installing, updating, or uninstalling packages in Orion, reopen Extension Editor
+to synchronize them and reload its window if necessary. Extensions installed
+directly in the VSCodium window remain in that editor's separate extension directory.
+
+The built-in Monaco editor continues to support JSON color themes (editor colors
+and approximate token color mapping) and snippets. Select **Use [theme name]**
+in an installed theme's details to apply it to the built-in editor.
 
 Claude Code (`anthropic.claude-code`) also supports **Run Claude Code in Terminal**
 in its installed-extension details. This starts the package's bundled native CLI
 in a new Orion terminal in the opened project. Follow Claude's setup and sign-in
-instructions there. It does not activate the extension's VS Code panel. Other
-executable extensions still require a compatible extension host.
+instructions there. Use **Open Extension Editor** for the extension's editor panel.
 
 Run `npm run test:extensions` for the installation and renderer tests. Run
 `node test/extension-marketplace-live.js` to verify real registry downloads in
 a temporary directory. `node test/verify_extensions.js` verifies installation,
 theme application, uninstall, and the existing terminal/editor layout in Electron
 with isolated application data.
+`node test/extension-editor-live.js` downloads/caches a verified VSCodium runtime
+and tests real Open VSX Prettier activation/formatting, diagnostics, and webviews
+in a disposable editor profile.
 
 - **Dynamic Terminal Grid Layout**: Manage 4–6 terminal panes simultaneously arranged in **2x3** or **3x2** layout grids with real-time xterm.js reflowing on window and pane resize
 - **tmux Persistent Backend**: Every terminal session is backed by a detached tmux session (`tmux new-session -A -s ide-<uuid>`). If the app crashes or quits, your CLI agent tasks continue executing in the background and reattach seamlessly upon app restart with scrollback intact.

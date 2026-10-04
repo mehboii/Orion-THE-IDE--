@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
 const { ExtensionService } = require('./extension-service');
+const { ExtensionEditor } = require('./extension-editor');
 const ptyManager = require('./pty-manager');
 const agentConfig = require('./agent-config');
 const workspaceStore = require('./workspace-store');
@@ -9,9 +10,36 @@ const customModelService = require('./custom-model-service');
 const projectRoot = require('./project-root');
 const gitService = require('./git-service');
 const developmentServices = require('./development-services');
+const { UpdateService } = require('./update-service');
 
-function registerIpcHandlers({ openEditorFile } = {}) {
+function registerIpcHandlers({ openEditorFile, updateService: customUpdateService } = {}) {
+  const updateService = customUpdateService || new UpdateService({
+    onStatusChanged: (status) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('updater:status-changed', status);
+      }
+    },
+    onDownloadProgress: (progress) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('updater:download-progress', progress);
+      }
+    }
+  });
+
+  ipcMain.handle('updater:check-for-updates', (_event, options) => updateService.checkForUpdates(options));
+  ipcMain.handle('updater:download-update', () => updateService.downloadUpdate());
+  ipcMain.handle('updater:get-status', () => updateService.getStatus());
+  ipcMain.handle('updater:install-update', () => updateService.installUpdate());
   const extensions = new ExtensionService({ root: path.join(app.getPath('userData'), 'extensions') });
+  const extensionEditor = new ExtensionEditor({ root: path.join(app.getPath('userData'), 'extension-editor'), extensions });
+  ipcMain.handle('extensions:use-builtin-editor', () => extensionEditor.useBuiltInEditor());
+  ipcMain.handle('extensions:open-editor', async (event, identifier) => {
+    if (identifier && !(await extensions.list()).some(item => item.id === String(identifier).toLowerCase())) throw new Error('Install this extension before opening it in Extension Editor.');
+    return extensions.serialize(() => extensionEditor.open({
+      workspace: projectRoot.get(),
+      progress: message => { if (!event.sender.isDestroyed()) event.sender.send('extensions:editor-progress', message); }
+    }));
+  });
   const broadcastExtensions = () => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send('extensions:changed');
@@ -249,7 +277,11 @@ function registerIpcHandlers({ openEditorFile } = {}) {
 
   // The main renderer requests editor files through this channel. It never
   // mounts Monaco itself; the file is delivered to the editor BrowserWindow.
-  ipcMain.handle('editor:open-file', (event, filePath) => {
+  ipcMain.handle('editor:open-file', async (event, filePath) => {
+    if (await extensionEditor.isEnabled()) {
+      await extensions.serialize(() => extensionEditor.open({ workspace: projectRoot.get(), file: filePath }));
+      return true;
+    }
     if (typeof openEditorFile === 'function') openEditorFile(filePath);
     return true;
   });

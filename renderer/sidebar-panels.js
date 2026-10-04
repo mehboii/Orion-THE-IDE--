@@ -52,13 +52,39 @@ class SidebarPanels {
   renderRunDebug() { const panel = this.panel('run-debug'); if (!panel) return; const panes = [...this.app.panes.values()]; panel.innerHTML = `<div class="panel-pad"><p class="panel-muted">Run configurations use Orion's real terminal sessions. Node files can be debugged from the detached editor.</p><button class="btn btn-primary" id="run-new-pane">New terminal session</button><div class="run-list">${panes.map(p => `<div class="run-item"><strong>${this.escape(p.label)}</strong><span>${this.escape(p.status || 'running')} · ${this.escape(p.cwd || '')}</span><button class="icon-text-btn" data-pane="${p.id}">Focus</button></div>`).join('') || '<div class="panel-muted">No active terminal sessions.</div>'}</div></div>`; panel.querySelector('#run-new-pane').onclick = () => this.app.createPane({}); panel.querySelectorAll('[data-pane]').forEach(btn => btn.onclick = () => this.app.focusPane(Number(btn.dataset.pane))); }
   renderExtensions() {
     const panel = this.panel('extensions'); if (!panel || panel.dataset.ready) return; panel.dataset.ready = 'true';
-    panel.innerHTML = `<div class="panel-pad extension-panel"><div class="extension-search"><input id="marketplace-search" class="text-input" placeholder="Search Open VSX extensions" autocomplete="off"><button id="marketplace-clear" class="icon-text-btn">Clear</button></div><button id="marketplace-installed" class="icon-text-btn">Installed extensions</button><div id="marketplace-state" class="panel-muted">Popular extensions from Open VSX</div><div id="marketplace-results" class="extension-results"></div><p class="marketplace-notice">Install any extension category from Open VSX. Orion supports color themes and snippets. Executable extension features require a VS Code-compatible extension host, which is not available yet.</p></div>`;
+    panel.innerHTML = `<div class="panel-pad extension-panel"><div class="extension-search"><input id="marketplace-search" class="text-input" placeholder="Search Open VSX extensions" autocomplete="off"><button id="marketplace-clear" class="icon-text-btn">Clear</button></div><button id="marketplace-installed" class="icon-text-btn">Installed extensions</button><button id="marketplace-open-editor" class="btn btn-primary">Open Extension Editor</button><p id="extension-editor-state" class="panel-muted" role="status"></p><div id="marketplace-state" class="panel-muted">Popular extensions from Open VSX</div><div id="marketplace-results" class="extension-results"></div><p class="marketplace-notice">Use Extension Editor for executable extensions, language tools, debuggers, and extension panels. It opens a VSCodium editor window with your workspace and installed packages. The first launch sets up the runtime; later file opens use this editor. After changing installed packages, reopen Extension Editor and reload its window if prompted.</p></div>`;
     const input = panel.querySelector('#marketplace-search');
     input.value = this.extensionQuery;
     input.addEventListener('input', () => { this.extensionQuery = input.value; clearTimeout(this.marketTimer); this.marketTimer = setTimeout(() => this.loadExtensions(input.value), 280); });
     panel.querySelector('#marketplace-clear').onclick = () => { clearTimeout(this.marketTimer); input.value = ''; this.extensionQuery = ''; this.loadExtensions(''); };
     panel.querySelector('#marketplace-installed').onclick = () => { clearTimeout(this.marketTimer); this.loadExtensions('', true); };
+    const openEditor = panel.querySelector('#marketplace-open-editor');
+    openEditor.onclick = () => this.openExtensionEditor(undefined, panel.querySelector('#extension-editor-state'), openEditor);
+    const builtIn = document.createElement('button');
+    builtIn.className = 'icon-text-btn'; builtIn.id = 'marketplace-builtin-editor'; builtIn.textContent = 'Use Built-in Editor';
+    openEditor.after(builtIn);
+    builtIn.onclick = async () => {
+      const state = panel.querySelector('#extension-editor-state');
+      builtIn.disabled = true;
+      try {
+        await window.electronAPI.useBuiltInEditor();
+        if (state.isConnected) state.textContent = 'Future file opens use the built-in editor. Existing editor windows stay open.';
+      } catch (error) { if (state.isConnected) state.textContent = error.message; }
+      finally { builtIn.disabled = false; }
+    };
     this.loadExtensions(this.extensionQuery);
+  }
+  async openExtensionEditor(id, state, button) {
+    button.disabled = true;
+    state.textContent = 'Preparing Extension Editor...';
+    const unsubscribe = window.electronAPI.onExtensionEditorProgress?.(message => {
+      if (state.isConnected) state.textContent = message;
+    });
+    try {
+      await window.electronAPI.openExtensionEditor(id);
+      if (state.isConnected) state.textContent = 'Extension Editor opened. Use its commands and extension panels there. Reload that window after installing updates if prompted.';
+    } catch (error) { if (state.isConnected) state.textContent = error.message; }
+    finally { unsubscribe?.(); button.disabled = false; }
   }
   async loadExtensions(query, installedOnly = false) {
     const panel = this.panel('extensions'); if (!panel) return;
@@ -92,6 +118,8 @@ class SidebarPanels {
         panel.querySelector('#extension-theme-actions').before(container);
         container.querySelectorAll('[data-extension-launch]').forEach(button => button.onclick = async () => {
           const state = panel.querySelector('#extension-operation-state');
+          const action = launchActions[Number(button.dataset.extensionLaunch)];
+          if (action.id === 'editor') return this.openExtensionEditor(id, state, button);
           button.disabled = true;
           state.textContent = 'Starting extension in a terminal...';
           try {

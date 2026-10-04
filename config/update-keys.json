@@ -1,0 +1,4 @@
+{
+  "description": "Pinned Ed25519 public keys for N11X Update Service verification. Do NOT place private signing keys here.",
+  "pinnedKeys": []
+}

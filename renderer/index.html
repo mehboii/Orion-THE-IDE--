@@ -184,6 +184,10 @@
           <span class="broadcast-indicator off" id="broadcast-indicator"></span>
           <span id="broadcast-status-text">Broadcast: Off</span>
         </span>
+        <span class="status-item hidden" id="status-update" title="Software Update" style="cursor: pointer;">
+          <span class="status-icon">&#x25B2;</span>
+          <span id="status-update-text">Update Available</span>
+        </span>
       </div>
       <div class="status-bar-right">
         <span class="status-item" id="status-workspace" title="Active workspace">Workspace: Default</span>
@@ -291,6 +295,29 @@
         <label>API key (optional) <input name="apiKey" class="text-input" type="password"></label>
         <div id="custom-model-test-result" class="custom-model-test-result"></div>
       </form><div class="modal-footer"><button id="btn-delete-custom-model" class="btn btn-danger" type="button">Delete</button><button id="btn-test-custom-model" class="btn btn-secondary" type="button">Test Connection</button><button id="btn-save-custom-model" class="btn btn-primary" type="button">Save</button></div>
+    </div>
+  </div>
+
+  <!-- Software Update Modal -->
+  <div id="modal-update" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Software Update">
+    <div class="modal-box" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3 id="update-modal-title">Software Update</h3>
+        <button class="modal-close" id="modal-update-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body" id="update-modal-body">
+        <div id="update-info-container"></div>
+        <div id="update-progress-container" class="hidden" style="margin-top: 14px;">
+          <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 6px;">
+            <div id="update-progress-fill" style="width: 0%; height: 100%; background: #007acc; transition: width 0.15s ease;"></div>
+          </div>
+          <div id="update-progress-text" style="font-size: 12px; color: #aaa;">0% downloaded</div>
+        </div>
+      </div>
+      <div class="modal-footer" id="update-modal-footer">
+        <button id="btn-update-cancel" class="btn btn-ghost" type="button">Later</button>
+        <button id="btn-update-action" class="btn btn-primary" type="button">Download Update</button>
+      </div>
     </div>
   </div>
 

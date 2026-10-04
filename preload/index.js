@@ -10,6 +10,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchMarketplace: (query, offset = 0, size = 30) => ipcRenderer.invoke('marketplace:search', { query, offset, size }),
   getMarketplaceDetails: (identifier) => ipcRenderer.invoke('marketplace:details', identifier),
   listExtensions: () => ipcRenderer.invoke('extensions:list'),
+  openExtensionEditor: (identifier) => ipcRenderer.invoke('extensions:open-editor', identifier),
+  useBuiltInEditor: () => ipcRenderer.invoke('extensions:use-builtin-editor'),
+  onExtensionEditorProgress: (callback) => {
+    const handler = (_event, message) => callback(message);
+    ipcRenderer.on('extensions:editor-progress', handler);
+    return () => ipcRenderer.removeListener('extensions:editor-progress', handler);
+  },
   getExtensionLaunchInfo: (identifier, action) => ipcRenderer.invoke('extensions:launch-info', identifier, action),
   installExtension: (identifier) => ipcRenderer.invoke('extensions:install', identifier),
   uninstallExtension: (identifier) => ipcRenderer.invoke('extensions:uninstall', identifier),
@@ -105,6 +112,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('git:status-changed', handler);
     return () => ipcRenderer.removeListener('git:status-changed', handler);
+  },
+  updater: {
+    checkForUpdates: (options) => ipcRenderer.invoke('updater:check-for-updates', options),
+    downloadUpdate: () => ipcRenderer.invoke('updater:download-update'),
+    getStatus: () => ipcRenderer.invoke('updater:get-status'),
+    installUpdate: () => ipcRenderer.invoke('updater:install-update'),
+    onStatusChanged: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('updater:status-changed', handler);
+      return () => ipcRenderer.removeListener('updater:status-changed', handler);
+    },
+    onDownloadProgress: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on('updater:download-progress', handler);
+      return () => ipcRenderer.removeListener('updater:download-progress', handler);
+    }
   },
   controlWindow: (action) => ipcRenderer.invoke('window:control', action)
 });
