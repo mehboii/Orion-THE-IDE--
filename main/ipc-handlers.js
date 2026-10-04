@@ -1,4 +1,6 @@
-const { ipcMain, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
+const path = require('path');
+const { ExtensionService } = require('./extension-service');
 const ptyManager = require('./pty-manager');
 const agentConfig = require('./agent-config');
 const workspaceStore = require('./workspace-store');
@@ -9,6 +11,12 @@ const gitService = require('./git-service');
 const developmentServices = require('./development-services');
 
 function registerIpcHandlers({ openEditorFile } = {}) {
+  const extensions = new ExtensionService({ root: path.join(app.getPath('userData'), 'extensions') });
+  const broadcastExtensions = () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('extensions:changed');
+    }
+  };
   const gitSubscriptions = new Map();
   const gitRefreshes = new Map();
   const stopGitWatch = (sender) => {
@@ -78,8 +86,33 @@ function registerIpcHandlers({ openEditorFile } = {}) {
     if (!normalized) return { results: [] };
     return { results: await developmentServices.walk(root, normalized, []) };
   });
-  ipcMain.handle('marketplace:search', (event, { query, offset, size }) => developmentServices.marketplaceSearch(query, offset, size));
-  ipcMain.handle('marketplace:details', (event, identifier) => developmentServices.marketplaceDetails(identifier));
+  ipcMain.handle('marketplace:search', async (event, { query, offset, size }) => {
+    const [data, installed] = await Promise.all([developmentServices.marketplaceSearch(query, offset, size), extensions.list()]);
+    const byId = new Map(installed.map(item => [item.id, item]));
+    return { ...data, results: data.results.map(item => ({ ...item, installed: byId.has(item.id.toLowerCase()), installedVersion: byId.get(item.id.toLowerCase())?.version })) };
+  });
+  ipcMain.handle('marketplace:details', async (event, identifier) => {
+    const installed = (await extensions.list()).find(item => item.id === String(identifier).toLowerCase());
+    try {
+      const details = await developmentServices.marketplaceDetails(identifier);
+      return { ...details, installed: Boolean(installed), installedVersion: installed?.version, runtimeMessage: installed?.runtimeMessage };
+    } catch (error) {
+      if (installed) return { ...installed, installedVersion: installed.version, compatibilityMessage: installed.runtimeMessage };
+      throw error;
+    }
+  });
+  ipcMain.handle('extensions:list', () => extensions.list());
+  ipcMain.handle('extensions:install', async (_event, identifier) => {
+    try { return await extensions.install(identifier); }
+    finally { broadcastExtensions(); }
+  });
+  ipcMain.handle('extensions:uninstall', async (_event, identifier) => {
+    const result = await extensions.uninstall(identifier); broadcastExtensions(); return result;
+  });
+  ipcMain.handle('extensions:contributions', () => extensions.contributions());
+  ipcMain.handle('extensions:theme', async (_event, themeId) => {
+    await extensions.setTheme(themeId); broadcastExtensions(); return true;
+  });
 
   // PTY session handlers
   ipcMain.handle('pty:create', async (event, params) => {
@@ -240,7 +273,6 @@ function registerIpcHandlers({ openEditorFile } = {}) {
 
   // Filesystem IPC handlers
   const fs = require('fs');
-  const path = require('path');
   const fileWatchers = new Map();
   const watcherCleanupRegistered = new Set();
   const approvedExternalPaths = new Map();

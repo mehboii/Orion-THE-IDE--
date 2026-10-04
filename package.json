@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test": "npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug && npm run test:git",
+    "test": "npm run test:extensions && npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug && npm run test:git",
     "rebuild": "npx @electron/rebuild -v 31.2.0",
     "postinstall": "npx @electron/rebuild -v 31.2.0",
     "dist": "npm run dist:linux",
@@ -23,7 +23,8 @@
     "test:editor-window": "node test/verify_editor_window.js",
     "test:run-debug": "node test/verify_run_debug_and_cwd.js",
     "test:git": "node test/git-service.js",
-    "test:explorer-stability": "node test/verify-explorer-stability.js"
+    "test:explorer-stability": "node test/verify-explorer-stability.js",
+    "test:extensions": "node test/extension-service.js && node test/editor-extensions.js && node test/marketplace-ui.js"
   },
   "keywords": [
     "electron",
@@ -44,13 +45,16 @@
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
     "electron-store": "^8.2.0",
+    "jsonc-parser": "^3.3.1",
     "monaco-editor": "^0.56.0",
-    "node-pty": "^1.0.0"
+    "node-pty": "^1.0.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "electron": "^31.2.0",
     "electron-builder": "^24.13.3",
+    "linkedom": "^0.18.13",
     "playwright": "^1.51.1"
   },
   "build": {

@@ -11,6 +11,29 @@
 
 ## Core Features.
 
+### Extension marketplace
+
+The Extensions sidebar searches Open VSX and installs VSIX packages without a
+category restriction, including themes, snippets, language/tool extensions,
+web extensions, and extension packs. Packages persist in the `extensions`
+directory under Electron's application data directory. Installation selects a
+matching platform package when available, installs dependencies and pack members,
+and exposes installed versions, updates, and uninstall in the existing sidebar.
+
+Installing a package does **not** mean all its features are active. Orion's
+current editor supports JSON color themes (editor colors and approximate token
+color mapping) and snippets. Select **Use [theme name]** in an installed theme's
+details to apply it to the editor. Executable extensions, custom language
+grammars, debuggers, custom views, and other VS Code API contributions require
+a compatible extension host/workbench integration that is not yet implemented.
+The marketplace shows this distinction instead of marking these packages active.
+
+Run `npm run test:extensions` for the installation and renderer tests. Run
+`node test/extension-marketplace-live.js` to verify real registry downloads in
+a temporary directory. `node test/verify_extensions.js` verifies installation,
+theme application, uninstall, and the existing terminal/editor layout in Electron
+with isolated application data.
+
 - **Dynamic Terminal Grid Layout**: Manage 4–6 terminal panes simultaneously arranged in **2x3** or **3x2** layout grids with real-time xterm.js reflowing on window and pane resize
 - **tmux Persistent Backend**: Every terminal session is backed by a detached tmux session (`tmux new-session -A -s ide-<uuid>`). If the app crashes or quits, your CLI agent tasks continue executing in the background and reattach seamlessly upon app restart with scrollback intact.
 - **Orphan Session Detection & Recovery**: Automatically detects orphaned `ide-*` tmux sessions on app startup and offers a 1-click interface to reattach them into active grid panes.

@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitAction: (action, filePath, message) => ipcRenderer.invoke('git:operation', { action, payload: { paths: filePath ? [filePath] : [], message } }),
   searchMarketplace: (query, offset = 0, size = 30) => ipcRenderer.invoke('marketplace:search', { query, offset, size }),
   getMarketplaceDetails: (identifier) => ipcRenderer.invoke('marketplace:details', identifier),
+  listExtensions: () => ipcRenderer.invoke('extensions:list'),
+  installExtension: (identifier) => ipcRenderer.invoke('extensions:install', identifier),
+  uninstallExtension: (identifier) => ipcRenderer.invoke('extensions:uninstall', identifier),
+  getExtensionContributions: () => ipcRenderer.invoke('extensions:contributions'),
+  setExtensionTheme: (themeId) => ipcRenderer.invoke('extensions:theme', themeId),
 
   // PTY Methods
   createPty: (params) => ipcRenderer.invoke('pty:create', params),
