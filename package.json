@@ -1,6 +1,6 @@
 {
   "name": "agent-terminal-ide",
-  "version": "13.0.1",
+  "version": "14.0.0",
   "description": "Desktop Terminal IDE for managing multiple CLI coding agents (Claude, Codex, Aider) simultaneously in a grid layout",
   "homepage": "https://github.com/mehboii/Orion-THE-IDE-",
   "main": "main/index.js",
@@ -50,6 +50,7 @@
     "jsonc-parser": "^3.3.1",
     "monaco-editor": "^0.56.0",
     "node-pty": "^1.0.0",
+    "ws": "^8.22.0",
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
@@ -132,7 +133,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ORION IDE 13"
+      "shortcutName": "ORION IDE 14"
     }
   },
   "allowScripts": {

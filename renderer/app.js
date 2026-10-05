@@ -1080,8 +1080,12 @@ class AppController {
     // command into an old shell. This makes the main process the observable
     // spawn point and guarantees the command cannot inherit a stale cwd.
     const launchInPane = async (pane, trigger) => {
+      // Finish folder-triggered restarts before replacing the selected session.
+      await this._rootSync;
       await startInProjectRoot(pane);
+      await this._rootSync;
       pane.agentId = agentObj.id;
+      pane.agentCommand = undefined;
       await this.restartPane(pane.id, { killTmux: true, trigger });
       if (this.panes.get(pane.id)?.cwd !== await window.electronAPI.getProjectRoot()) {
         throw new Error('Could not resolve working directory: agent session did not start in the opened folder.');

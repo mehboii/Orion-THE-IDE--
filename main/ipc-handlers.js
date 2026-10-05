@@ -428,11 +428,16 @@ function registerIpcHandlers({ openEditorFile, updateService: customUpdateServic
       const key = watcherKey(event.sender, target);
       if (fileWatchers.has(key)) return true;
       let debounceTimer = null;
+      const pendingChanges = new Map();
+      const watchingDirectory = fs.statSync(target).isDirectory();
       // Windows supports recursive fs.watch, allowing a single owner per
       // workspace to identify nested structural changes. Other platforms use
       // their native non-recursive watcher rather than creating a watcher for
       // every directory.
       const watcher = fs.watch(target, process.platform === 'win32' ? { recursive: true } : {}, (eventType, filename) => {
+        const changedPath = watchingDirectory && filename ? path.resolve(target, String(filename)) : target;
+        // Keep structural events when creation also emits a content change.
+        if (pendingChanges.get(changedPath) !== 'rename') pendingChanges.set(changedPath, eventType);
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           const win = event.sender.getOwnerBrowserWindow();
@@ -440,14 +445,16 @@ function registerIpcHandlers({ openEditorFile, updateService: customUpdateServic
             // fs.watch reports a name relative to the watched directory.  Do
             // not discard it: consumers need the affected parent directory
             // to avoid rebuilding an entire Explorer tree for one entry.
-            const changedPath = filename ? path.resolve(target, String(filename)) : target;
-            const relativeParts = path.relative(target, changedPath).split(path.sep);
-            // Generated output is intentionally not a source-tree refresh
-            // trigger. Git continues to make an independent decision about
-            // whether an unignored file merits a decoration.
-            if (relativeParts.some((part) => ['node_modules', 'dist', 'build', '.cache', '.next'].includes(part))) return;
-            win.webContents.send('file-changed', { filePath: changedPath, eventType });
+            for (const [changedPath, eventType] of pendingChanges) {
+              const relativeParts = path.relative(target, changedPath).split(path.sep);
+              // Generated output is intentionally not a source-tree refresh
+              // trigger. Git continues to make an independent decision about
+              // whether an unignored file merits a decoration.
+              if (relativeParts.some((part) => ['node_modules', 'dist', 'build', '.cache', '.next'].includes(part))) continue;
+              win.webContents.send('file-changed', { filePath: changedPath, eventType });
+            }
           }
+          pendingChanges.clear();
         }, 150);
       });
       watcher.on('error', (error) => {
