@@ -74,10 +74,12 @@ in a disposable editor profile.
 ## Prerequisites & Installation
 
 The Windows installer upgrades the system installation in Program Files. After
-installing version 13, launch **ORION IDE 13** and confirm the window title shows
-**v13.0.1**. The app keeps its existing application data location. Builds validate
+installing version 14, launch **ORION IDE 14** and confirm the window title shows
+**v14.0.0**. The app keeps its existing application data location. Builds validate
 the packaged marketplace code and reject the obsolete blocked-install UI before
-creating an installer.
+creating an installer. Version 14 also fixes Windows Explorer file creation
+refresh, external editor file updates, and Run Agent command/folder synchronization,
+and includes the WebSocket runtime dependency required for JavaScript debugging.
 
 ### 1. Prerequisites
 - **Node.js**: Version 18 or 20+
@@ -156,9 +158,14 @@ expected same-origin download route. Downloading is manual, streamed, and
 checked against the signed size and SHA-256. **Show Download** reveals the
 verified file; Orion does not execute an installer.
 
-Production trust belongs in `config/update-keys.json` (`pinnedKeys`, public PEM
-strings). It remains empty pending an independently authorized production key.
-No key is trusted from an API response. Development overrides
+Production trust is pinned in `config/update-keys.json` as an Ed25519 public PEM
+and its SHA-256 SPKI DER key ID:
+`279edf884548fa316ee4f96117e547953df6ae22854a0a7a0baf159c45b0fbf8`.
+The public key comes from the saved production trust record, independently of
+update API responses. electron-builder includes this configuration in `app.asar`;
+the packaging check rejects missing, invalid, or mismatched trust anchors. Only
+the public verification key belongs in Orion; signing credentials remain on
+release infrastructure. No key is trusted from an API response. Development overrides
 `N11X_UPDATE_PUBLIC_KEY` (public PEM) and `N11X_UPDATE_PUBLIC_KEYS_PATH` (JSON array
 of public PEM strings) work only for unpackaged Orion using a loopback backend;
 packaged applications ignore these overrides. Never supply a private key.
@@ -307,7 +314,7 @@ npm install
 npm run dist:win
 ```
 
-The installable executable is written to `dist/Agent Terminal IDE-<version>-Setup.exe`.
+The installable executable is written to `dist/ORION IDE-<version>-Setup.exe`.
 It lets the user choose an installation folder and creates Start Menu and desktop shortcuts.
 Windows SmartScreen may show a warning for this unsigned build. Code signing is
 needed before distributing the installer broadly.

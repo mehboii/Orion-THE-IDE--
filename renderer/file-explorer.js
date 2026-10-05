@@ -155,7 +155,10 @@ class FileExplorer {
     const normalized = String(filePath).replace(/\\/g, '/');
     const root = String(this.currentRootDir).replace(/\\/g, '/').replace(/\/$/, '');
     if (normalized === root) return this.currentRootDir;
-    return normalized.slice(0, normalized.lastIndexOf('/')) || this.currentRootDir;
+    const parent = normalized.slice(0, normalized.lastIndexOf('/'));
+    // Tree keys retain the canonical root's separators, including on Windows.
+    const separator = this.currentRootDir.includes('\\') ? '\\' : '/';
+    return this.currentRootDir + parent.slice(root.length).replace(/\//g, separator);
   }
 
   queueRefresh(directory = this.currentRootDir) {

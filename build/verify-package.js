@@ -1,5 +1,6 @@
 const path = require('path');
 const asar = require('@electron/asar');
+const crypto = require('crypto');
 
 // Validate the archive that goes into the installer, rather than source files.
 module.exports = async function verifyPackage(context) {
@@ -22,13 +23,21 @@ module.exports = async function verifyPackage(context) {
     'main/update-service.js', 'main/update-client.js', 'main/update-config.js', 'config/update-keys.json',
     'main/extension-service.js', 'main/extension-editor.js', 'main/marketplace-http.js', 'renderer/editor-extensions.js',
     'node_modules/yauzl/index.js', 'node_modules/yauzl/crc32.js', 'node_modules/yauzl/fd-slicer.js',
-    'node_modules/pend/index.js', 'node_modules/jsonc-parser/lib/umd/main.js'
+    'node_modules/pend/index.js', 'node_modules/jsonc-parser/lib/umd/main.js',
+    'node_modules/ws/index.js', 'node_modules/ws/lib/websocket.js'
   ]) {
     if (!read(file).length) throw new Error(`Packaging rejected: required file is empty: ${file}`);
   }
   const updateKeys = JSON.parse(read('config/update-keys.json'));
   if (!Array.isArray(updateKeys.pinnedKeys) || /BEGIN (?:ENCRYPTED |RSA |EC )?PRIVATE KEY/.test(JSON.stringify(updateKeys))) {
     throw new Error('Packaging rejected: invalid update public trust configuration or private signing material.');
+  }
+  if (!updateKeys.pinnedKeys.length) throw new Error('Packaging rejected: production public trust anchor is missing.');
+  for (const entry of updateKeys.pinnedKeys) {
+    if (!entry.pem?.startsWith('-----BEGIN PUBLIC KEY-----')) throw new Error('Packaging rejected: expected public SPKI PEM.');
+    const key = crypto.createPublicKey(entry.pem);
+    const fingerprint = crypto.createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('hex');
+    if (key.asymmetricKeyType !== 'ed25519' || entry.keyId !== fingerprint) throw new Error('Packaging rejected: public trust fingerprint mismatch.');
   }
   if (!ui.includes('getExtensionLaunchInfo') || !read('preload/index.js').includes('getExtensionLaunchInfo') || !read('main/ipc-handlers.js').includes("'extensions:launch-info'")) {
     throw new Error('Packaging rejected: installed-extension terminal launch flow is missing.');

@@ -293,9 +293,18 @@ test('production configuration rejects insecure origins and ignores development 
     process: { ...process, env: { N11X_UPDATE_PUBLIC_KEY: pubPem } } };
   vm.runInNewContext(source, context);
   const packaged = new exports.exports.UpdateService();
-  assert.equal(packaged.pinnedKeys.size, 0);
+  const expectedKeyId = '279edf884548fa316ee4f96117e547953df6ae22854a0a7a0baf159c45b0fbf8';
+  assert.equal(packaged.pinnedKeys.size, 1);
+  assert(packaged.pinnedKeys.has(expectedKeyId));
+  assert(!packaged.pinnedKeys.has(computeKeyId(publicKey)), 'packaged app ignores the development key override');
   const production = new UpdateService({ serverUrl: PRODUCTION_UPDATE_BASE_URL });
-  assert.equal(production.pinnedKeys.size, 0);
+  assert.equal(production.pinnedKeys.size, 1);
+  assert(production.pinnedKeys.has(expectedKeyId));
+  assert.equal(computeKeyId(production.pinnedKeys.get(expectedKeyId)), expectedKeyId);
+  assert.throws(() => production.verifyManifest(signedManifest()), /Untrusted signing key/);
+  const spoofed = signedManifest();
+  spoofed.keyId = expectedKeyId;
+  assert.throws(() => production.verifyManifest(spoofed), /Invalid manifest Ed25519 signature/);
   assert(!fs.readFileSync(path.join(__dirname, '../config/update-keys.json'), 'utf8').includes('BEGIN PRIVATE KEY'));
 });
 

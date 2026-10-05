@@ -1,4 +1,9 @@
 {
-  "description": "Pinned Ed25519 public keys for N11X Update Service verification. Do NOT place private signing keys here.",
-  "pinnedKeys": []
+  "description": "Build-time production Ed25519 public trust anchors for N11X updates. Never include signing secrets or trust server-supplied keys.",
+  "pinnedKeys": [
+    {
+      "keyId": "279edf884548fa316ee4f96117e547953df6ae22854a0a7a0baf159c45b0fbf8",
+      "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAN9+hAvtvgU7yw7tR4HDlD6bS1w8sFH5ZAJmBUXxf/pA=\n-----END PUBLIC KEY-----\n"
+    }
+  ]
 }
