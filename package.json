@@ -8,10 +8,10 @@
     "start": "electron .",
     "dev": "electron .",
     "test": "npm run test:updater && npm run test:extensions && npm run test:smoke && npm run test:workdir && npm run test:external-cwd && npm run test:custom-models && npm run test:code-editor && npm run test:editor-fixes && npm run test:editor-window && npm run test:run-debug && npm run test:git",
-    "rebuild": "npx @electron/rebuild -v 31.2.0",
-    "postinstall": "npx @electron/rebuild -v 31.2.0",
+    "rebuild": "electron-rebuild --force",
+    "postinstall": "electron-rebuild",
     "dist": "npm run dist:linux",
-    "dist:linux": "electron-builder --linux AppImage deb rpm tar.gz --x64",
+    "dist:linux": "npm run rebuild && electron-builder --linux AppImage deb rpm tar.gz --x64 --publish never",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --x64",
     "test:updater": "node test/update-service.js && node test/update-ui.js && node test/update-app.js",
@@ -134,9 +134,42 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "ORION IDE 14"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2",
+        "tmux"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "mesa-libgbm",
+        "alsa-lib",
+        "tmux"
+      ]
     }
   },
   "allowScripts": {
+    "electron": true,
     "node-pty": true,
     "@electron/rebuild": true
   }

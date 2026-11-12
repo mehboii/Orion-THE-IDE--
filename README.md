@@ -264,36 +264,63 @@ Agent presets can also be saved in your user data directory (`<userData>/user_ag
 
 ## Building & Packaging for Linux
 
-The Linux release is an **x64 AppImage**, a self-contained executable that works across mainstream Linux distributions (Ubuntu, Debian, Fedora, Arch, Mint, openSUSE, and others). It must be built on Linux so the native `node-pty` dependency is compiled for Linux; use the included GitHub Actions workflow for builds from Windows or macOS.
+Linux x64 releases include a portable **AppImage** for Fedora Workstation and
+Debian, a **RPM installer** for Fedora, a **DEB installer** for Debian/Ubuntu,
+and a tar.gz archive. Node.js is only needed when building from source.
+
+### Install on Fedora Workstation
 
 ```bash
-# Build the portable Linux AppImage from a Linux machine
-npm run dist
+sudo dnf install ./agent-terminal-ide-14.0.0-x86_64.rpm
 ```
 
-The output will be generated in the `./dist/` directory:
-- `dist/agent-terminal-ide-4.0.0-x64.AppImage`
-
-On GitHub, run the **Build Linux AppImage** workflow manually or push a version tag. A tag such as `v4.0.0` also creates a GitHub Release with the AppImage attached, so users can download the latest release with the GitHub CLI:
+### Install on Debian / Ubuntu
 
 ```bash
-gh release download --repo mehboii/THE-IDE- --pattern '*.AppImage'
+sudo apt install ./agent-terminal-ide-14.0.0-amd64.deb
 ```
 
-To download a particular version, replace `v4.0.0` below with its release tag:
+Both installers add ORION IDE to the application launcher and install `tmux`
+for persistent terminal sessions.
+
+### Portable AppImage on either distribution
 
 ```bash
-gh release download v4.0.0 --repo mehboii/THE-IDE- --pattern '*.AppImage'
+chmod +x agent-terminal-ide-14.0.0-x86_64.AppImage
+./agent-terminal-ide-14.0.0-x86_64.AppImage
 ```
 
-Manual workflow runs provide the `linux-appimage-x64` Actions artifact instead. On the target machine:
+Install `tmux` separately for persistent sessions (`sudo dnf install tmux` on
+Fedora or `sudo apt install tmux` on Debian). If FUSE 2 is unavailable, run:
 
 ```bash
-chmod +x agent-terminal-ide-*-x64.AppImage
-./agent-terminal-ide-*-x64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./agent-terminal-ide-14.0.0-x86_64.AppImage
 ```
 
-The target machine still needs `tmux` installed for persistent terminal sessions. On distributions with FUSE 2 unavailable, AppImages can be launched with `APPIMAGE_EXTRACT_AND_RUN=1 ./agent-terminal-ide-*-x64.AppImage`.
+### Build all Linux packages
+
+Build on Linux with Node.js 22 or newer and native build tools. Use Debian 12
+or Ubuntu 22.04 as the build environment for compatibility with older glibc
+versions; a native Fedora build may require a newer glibc on the target machine.
+
+```bash
+# Debian / Ubuntu build tools
+sudo apt install build-essential python3 rpm
+# Fedora build tools (when building natively on Fedora)
+sudo dnf install gcc-c++ make python3 rpm-build
+
+npm ci
+bash build-linux.sh
+```
+
+The script rebuilds `node-pty` for the installed Electron version and writes
+AppImage, DEB, RPM, tar.gz, and `SHA256SUMS-14.0.0-linux.txt` to `dist/`.
+Verify downloaded artifacts with `sha256sum -c SHA256SUMS-14.0.0-linux.txt`
+from that directory.
+
+The **Build Linux Packages** GitHub Actions workflow builds all four formats.
+Manual runs upload the `linux-packages-x64` artifact; version tags also attach
+the packages and checksums to a GitHub Release.
 
 ### macOS package
 
